@@ -151,52 +151,43 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   asset_sims_transformed <- array(NA, dim = c(n_sim, horizon, n_assets))
   dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names) # Assign dimnames after creation
 
-  for (i in 1:n_sim) {
-    # Pass the DCCfit object directly and let dccsim handle starting values
-    sim <- rmgarch::dccsim(
-      dcc_garch_model, # Pass the DCCfit object directly
-      n.sim = horizon, # Simulate for the given horizon
-      m.sim = 1, # Generate 1 path for this simulation
-      startMethod = "sample" # Let dccsim automatically extract starting values from the fit
-      # Removed cluster = NULL
-      # prereturns, presigma, preresiduals, preQ, preZ etc. will be automatically derived from the last observation of the fitted model
-    )
-    
-    # --- DEBUGGING START ---
-    message(paste0("DEBUG: Iteration ", i, ": class(sim): ", paste(class(sim), collapse = ", ")))
-    message(paste0("DEBUG: Iteration ", i, ": slotNames(sim): ", paste(slotNames(sim), collapse = ", ")))
-    debug_file_path <- file.path(app_config$default$cache_dir, paste0("dccsim_output_iter_", i, ".rds"))
-    saveRDS(sim, debug_file_path)
-    message(paste0("DEBUG: Iteration ", i, ": sim object saved to ", debug_file_path))
-    message(paste0("DEBUG: Iteration ", i, ": dim(sim@msim$simX[[1]]): ", paste(dim(sim@msim$simX[[1]]), collapse = ", ")))
-    message(paste0("DEBUG: Iteration ", i, ": dim(asset_sims_transformed): ", paste(dim(asset_sims_transformed), collapse = ", ")))
-    # --- DEBUGGING END ---
-    
-    # Extract simulated series (returns)
-    # The actual simulated series for a DCCsim object are in the @msim slot.
-    asset_sims_transformed[i, , ] <- sim@msim$simX[[1]]
-  }
-  
-  message("DEBUG: Starting asset inverse transformations.")
-  message("DEBUG: asset_var_names: ", paste(asset_var_names, collapse = ", "))
-  
-  asset_scenarios_reconstructed <- array(NA, dim = dim(asset_sims_transformed))
-  dimnames(asset_scenarios_reconstructed) <- dimnames(asset_sims_transformed)
+  # Perform a single simulation call for all n_sim simulations
+  sim_all <- rmgarch::dccsim(
+    dcc_garch_model,
+    n.sim = horizon,
+    m.sim = n_sim, # Generate all n_sim simulations at once
+    startMethod = "sample"
+  )
 
-  for (j in 1:n_assets) {
-    ticker <- asset_var_names[j]
-    message("DEBUG: Processing asset ticker for inverse transform: ", ticker)
-    for (s in 1:n_sim) {
-      sim_series <- as.numeric(asset_sims_transformed[s, , j])
-      message("DEBUG: sim_series class: ", class(sim_series), ", head: ", paste(head(sim_series), collapse = ", "))
-      
-      reconstructed_series <- reconstruct_asset_returns_from_log(sim_series)
-      message("DEBUG: reconstructed_series class: ", class(reconstructed_series), ", head: ", paste(head(reconstructed_series), collapse = ", "))
-      
-      asset_scenarios_reconstructed[s, , j] <- reconstructed_series
-    }
-  }
-  asset_scenarios_array <- asset_scenarios_reconstructed
+  # Extract simulated series (returns)
+  # sim_all@msim$simX is a list of matrices, where each matrix is a simulation path
+  # Convert the list of matrices to a 3D array of dimensions [n_sim, horizon, n_assets]
+  asset_sims_transformed <- purrr::map_depth(sim_all@msim$simX, 1, ~ t(.x)) %>%
+    simplify2array() %>%
+    aperm(c(3, 1, 2))
+  
+  # Ensure dimnames are correctly set
+  dimnames(asset_sims_transformed)[[3]] <- asset_var_names
+  
+  # For asset returns, the simulated values from dccsim are already simple returns.
+  # No inverse transformation is needed here; the array 'asset_sims_transformed'
+  # already contains the simulated simple returns.
+  asset_scenarios_array <- asset_sims_transformed
+  # The original loop for inverse transformation of asset returns was:
+  # for (j in 1:n_assets) {
+  #   ticker <- asset_var_names[j]
+  #   message("DEBUG: Processing asset ticker for inverse transform: ", ticker)
+  #   for (s in 1:n_sim) {
+  #     sim_series <- as.numeric(asset_sims_transformed[s, , j])
+  #     message("DEBUG: sim_series class: ", class(sim_series), ", head: ", paste(head(sim_series), collapse = ", "))
+  #     
+  #     reconstructed_series <- reconstruct_asset_returns_from_log(sim_series)
+  #     message("DEBUG: reconstructed_series class: ", class(reconstructed_series), ", head: ", paste(head(reconstructed_series), collapse = ", "))
+  #     
+  #     asset_scenarios_reconstructed[s, , j] <- reconstructed_series
+  #   }
+  # }
+  # asset_scenarios_array <- asset_scenarios_reconstructed
   
   message("DEBUG: asset_scenarios_array class: ", class(asset_scenarios_array), ", dim: ", paste(dim(asset_scenarios_array), collapse = ", "))
   message("DEBUG: macro_scenarios_array class: ", class(macro_scenarios_array), ", dim: ", paste(dim(macro_scenarios_array), collapse = ", "))
