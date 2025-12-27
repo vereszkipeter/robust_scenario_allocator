@@ -1,0 +1,50 @@
+# Configuration for the Robust Scenario Allocator
+
+default:
+  data:
+    tickers: 
+      - "SPY"   # S&P 500 ETF
+      - "AGG"   # Core US Aggregate Bond ETF
+      - "GLD"   # Gold ETF
+      - "QQQ"   # Nasdaq 100 ETF
+    from: "2010-01-01"
+    to: "2023-12-31" # Using a fixed date for stability
+  cache_dir: "data/cache" # Directory for caching downloaded raw data
+
+  # Scenario Generation Parameters
+  n_simulations: 100
+  horizon_months: 60
+
+  # Walk-forward Validation Parameters
+  initial_window_months: 60 # Initial training window length in months (e.g., 5 years)
+  roll_forward_months: 12   # How many months to roll forward for each rebalancing step
+  validation_start_date: "2015-01-01" # Date from which validation windows start to roll
+
+  # Model Parameters
+  models:
+    bvar_lags: 2
+
+    # RS-BVAR Model Parameters
+    rsbvar_n_iter_mcmc: 2000
+    rsbvar_n_burnin_mcmc: 1000
+    rsbvar_tau: 0.1 # Prior parameter for bsvars (overall tightness)
+    rsbvar_rho: 0.5 # Prior parameter for bsvars (cross-variable tightness)
+    rsbvar_M: 2 # Number of regimes for the RS-BVAR
+
+    risk_aversion_param: 2.5 # Example risk aversion parameter for implied equilibrium returns
+    short_rate_variable_name: "FEDFUNDS" # Federal Funds Effective Rate
+    term_premium_min: -0.005 # Example: -50 bps Term Premium
+    term_premium_max: 0.015 # Example: +150 bps Term Premium
+    dro_epsilon: 0.01 # Epsilon for Distributionally Robust Optimization (Wasserstein ball radius)
+    entropy_penalty_kappa: 0.001 # Kappa for entropy regularization in DRO
+    cvar_alpha: 0.05 # Alpha level for CVaR calculations (e.g., 0.05 for 95% CVaR)
+    base_term_premium: 0.005 # Base term premium for placeholder model
+    tp_sensitivity: 0.5 # Sensitivity of term premium to short rate for placeholder model
+    confidence_level: 0.95 # Confidence level for Probabilistic Sharpe Ratio and Deflated Sharpe Ratio
+    transaction_cost_flat_rate: 0.001 # Flat rate transaction cost applied at rebalancing
+    # Add other model parameters here as needed
+
+# Future sections for models and optimization
+# optimization:
+#   dro_epsilon: 0.05
+#   gamma: 0.95

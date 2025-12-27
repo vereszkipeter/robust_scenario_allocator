@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+_targets/
+renv/
+data/raw/*.csv
+output/
+docs_context/
