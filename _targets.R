@@ -60,10 +60,11 @@ list(
     asset_metadata,
     tibble::tribble(
       ~ticker, ~source,   ~asset_class,     ~transform_name,      ~transform,         ~inverse_transform,
-      app_config$default$data$tickers[1], "Yahoo", "Asset", "log_return",       log_return,         exp_return, # SPY
-      app_config$default$data$tickers[2], "Yahoo", "Asset", "log_return",       log_return,         exp_return, # AGG
-      app_config$default$data$tickers[3], "Yahoo", "Asset", "log_return",       log_return,         exp_return, # GLD
-      app_config$default$data$tickers[4], "Yahoo", "Asset", "log_return",       log_return,         exp_return, # QQQ
+      app_config$default$data$tickers[1], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # SPY
+      app_config$default$data$tickers[2], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # AGG
+      app_config$default$data$tickers[3], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # GLD
+      app_config$default$data$tickers[4], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # QQQ
+      "VIXCLS", "FRED", "Makro Változó", "log_transform", base::log, base::exp, # VIX
       "CPIAUCSL", "FRED", "Makro Változó", "mom_change",       mom_change,       undo_mom_change, # Inflation
       "FEDFUNDS", "FRED", "Makro Változó", "identity_transform", identity_transform, identity_transform_inverse, # Rates
       "INDPRO",   "FRED", "Makro Változó", "mom_change",       mom_change,       undo_mom_change  # Growth

@@ -41,6 +41,22 @@ undo_mom_change <- function(x) {
   1 + x
 }
 
+#' @title Calculate Simple Returns
+#' @description Calculates the simple returns of a financial time series.
+#' @param x An xts object, typically of adjusted prices.
+#' @return An xts object of simple returns.
+simple_return <- function(x) {
+  PerformanceAnalytics::Return.calculate(x, method = "simple")
+}
+
+#' @title Inverse of Simple Returns (Factor)
+#' @description Converts simple returns back to a multiplier (1 + return).
+#' @param x An xts object of simple returns.
+#' @return An xts object of multipliers (1 + simple_return).
+undo_simple_return <- function(x) {
+  1 + x
+}
+
 
 #' @title Identity Transformation
 #' @description Returns the input series unchanged. Useful for data that doesn't
@@ -164,37 +180,55 @@ calculate_psr_dsr <- function(R, confidence_level, n_strategies = 1) {
 #' `app_config` list.
 ensure_app_config_defaults <- function(app_config) {
   if (is.null(app_config)) app_config <- list()
+  
+  # Ensure top-level 'default' section exists
   if (is.null(app_config$default)) app_config$default <- list()
+
+  # Set defaults for top-level keys within 'default' if not already present
+  if (is.null(app_config$default$cache_dir)) app_config$default$cache_dir <- "data/cache"
+  if (is.null(app_config$default$n_simulations)) app_config$default$n_simulations <- 100
+  if (is.null(app_config$default$horizon_months)) app_config$default$horizon_months <- 60
+  if (is.null(app_config$default$initial_window_months)) app_config$default$initial_window_months <- 60
+  if (is.null(app_config$default$roll_forward_months)) app_config$default$roll_forward_months <- 12
+  if (is.null(app_config$default$validation_start_date)) app_config$default$validation_start_date <- "2015-01-01"
+
+  # Ensure 'models' sub-section exists within 'default'
   if (is.null(app_config$default$models)) app_config$default$models <- list()
 
+  # Now populate defaults for keys within 'app_config$default$models'
   mods <- app_config$default$models
-  if (is.null(mods$risk_aversion_param)) mods$risk_aversion_param <- 3.0
-  if (is.null(mods$term_premium_min)) mods$term_premium_min <- -0.005
-  if (is.null(mods$term_premium_max)) mods$term_premium_max <- 0.015
-  if (is.null(mods$dro_epsilon)) mods$dro_epsilon <- 0.05
-  if (is.null(mods$short_rate_variable_name)) mods$short_rate_variable_name <- "SHORT_RATE"
-  # New RS-BVAR MCMC parameters
+  if (is.null(mods$bvar_lags)) mods$bvar_lags <- 2 # Added this default based on config.yml
   if (is.null(mods$rsbvar_n_iter_mcmc)) mods$rsbvar_n_iter_mcmc <- 2000
   if (is.null(mods$rsbvar_n_burnin_mcmc)) mods$rsbvar_n_burnin_mcmc <- 1000
   if (is.null(mods$rsbvar_tau)) mods$rsbvar_tau <- 0.1
   if (is.null(mods$rsbvar_rho)) mods$rsbvar_rho <- 0.5
   if (is.null(mods$rsbvar_M)) mods$rsbvar_M <- 2
-  # New DRO parameters
+  if (is.null(mods$risk_aversion_param)) mods$risk_aversion_param <- 3.0
+  if (is.null(mods$short_rate_variable_name)) mods$short_rate_variable_name <- "SHORT_RATE"
+  if (is.null(mods$term_premium_min)) mods$term_premium_min <- -0.005
+  if (is.null(mods$term_premium_max)) mods$term_premium_max <- 0.015
+  if (is.null(mods$dro_epsilon)) mods$dro_epsilon <- 0.05
   if (is.null(mods$entropy_penalty_kappa)) mods$entropy_penalty_kappa <- 0.001
-  # New HRP parameter
-  if (is.null(mods$hrp_linkage_method)) mods$hrp_linkage_method <- "single" # Default as per HierPortfolios example
-
-  # View / reporting / runtime defaults
   if (is.null(mods$base_term_premium)) mods$base_term_premium <- 0.002
   if (is.null(mods$tp_sensitivity)) mods$tp_sensitivity <- 0.5
   if (is.null(mods$transaction_cost_flat_rate)) mods$transaction_cost_flat_rate <- 0
   if (is.null(mods$cvar_alpha)) mods$cvar_alpha <- 0.05
-  if (is.null(mods$cdar_beta)) mods$cdar_beta <- 0.05
+  if (is.null(mods$cdar_beta)) mods$cdar_beta <- 0.05 # Added this default based on config.yml
   if (is.null(mods$confidence_level)) mods$confidence_level <- 0.95
-  if (is.null(mods$ep_shrinkage_alpha)) mods$ep_shrinkage_alpha <- 0.1 # New shrinkage parameter
-  if (is.null(mods$ep_return_tolerance)) mods$ep_return_tolerance <- 0.001 # New tolerance for Entropy Pooling views
+  if (is.null(mods$ep_shrinkage_alpha)) mods$ep_shrinkage_alpha <- 0.1
+  if (is.null(mods$ep_return_tolerance)) mods$ep_return_tolerance <- 0.001
+  if (is.null(mods$hrp_linkage_method)) mods$hrp_linkage_method <- "single" # Default as per HierPortfolios example
+  if (is.null(mods$dcc_solver)) mods$dcc_solver <- "solnp" # Added this default
+  if (is.null(mods$dcc_solver_control)) mods$dcc_solver_control <- list(trace = 0) # Added this default
 
   app_config$default$models <- mods
+  
+  # Ensure app_config$default$data is properly handled
+  if (is.null(app_config$default$data)) app_config$default$data <- list()
+  if (is.null(app_config$default$data$tickers)) app_config$default$data$tickers <- c("SPY", "AGG", "GLD", "QQQ") # Example default
+  if (is.null(app_config$default$data$from)) app_config$default$data$from <- "2010-01-01" # Example default
+  if (is.null(app_config$default$data$to)) app_config$default$data$to <- Sys.Date() # Example default
+  
   return(app_config)
 }
 

@@ -144,23 +144,24 @@ get_all_raw_data <- function(asset_metadata, cache_dir, from, to) {
 #' Handles potential NAs and aligns data.
 #' @param raw_data An xts object containing all merged raw data series.
 #' @param asset_metadata A tibble containing asset information, including ticker and transformation functions.
+#' @param window_to_date The 'to' date of the current window, used to check for incomplete last months.
 #' @return An xts object with all transformed and standardized monthly data.
-apply_transformations <- function(raw_data, asset_metadata) {
-  
+apply_transformations <- function(raw_data, asset_metadata, window_to_date) {
+
   transformed_list <- list()
-  
+
   for (i in seq_len(nrow(asset_metadata))) {
     row <- asset_metadata[i, ]
     ticker <- row$ticker
     transform_func <- row$transform[[1]] # Correctly extract the function object
-    
+
     if (!ticker %in% colnames(raw_data)) {
       warning("Ticker ", ticker, " not found in raw_data. Skipping transformation.")
       next
     }
-    
+
     series <- raw_data[, ticker] # This is the original daily/raw data for the ticker
-    
+
     # Ensure data is monthly before applying transformations like log_return or mom_change
     # For Yahoo (prices), get monthly *levels* (last day of month price) first
     if (row$source == "Yahoo") {
@@ -173,6 +174,25 @@ apply_transformations <- function(raw_data, asset_metadata) {
         } else { # Already monthly or other suitable low frequency
             monthly_levels <- series
         }
+    }
+
+    # IMPORTANT: Check for incomplete last month and drop if necessary
+    # `window_to_date` is the actual end date of the window, so we compare it with the end of the month
+    if (!is.null(window_to_date) && NROW(monthly_levels) > 0) {
+      last_date_in_monthly_levels <- index(tail(monthly_levels, 1))
+      # Check if the window_to_date is before the true end of the month for the last observation
+      # Use `ceiling_date` to find the end of the month containing window_to_date
+      end_of_month_for_window_to_date <- lubridate::ceiling_date(as.Date(window_to_date), "month") - lubridate::days(1)
+
+      if (as.Date(window_to_date) < end_of_month_for_window_to_date) {
+        # If the last monthly observation's date is within the same month as window_to_date,
+        # but window_to_date is not the actual end of that month, it's an incomplete month.
+        if (lubridate::month(last_date_in_monthly_levels) == lubridate::month(window_to_date) &&
+            lubridate::year(last_date_in_monthly_levels) == lubridate::year(window_to_date)) {
+          monthly_levels <- head(monthly_levels, -1)
+          message("Dropped incomplete last month for ticker: ", ticker, ". Last full month is up to: ", index(tail(monthly_levels, 1)))
+        }
+      }
     }
     
     # Apply transformation function to the monthly levels

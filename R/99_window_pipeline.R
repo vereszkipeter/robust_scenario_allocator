@@ -12,33 +12,35 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   )
 
   # 3. Data Processing
-  monthly_returns <- apply_transformations(raw_data = raw_data, asset_metadata = asset_metadata)
+  monthly_returns <- apply_transformations(raw_data = raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
   split_data <- split_data_by_type(monthly_returns, asset_metadata)
   asset_returns <- split_data$asset_returns
   macro_data <- split_data$macro_data
 
   # 1-month lag for macro data
-  lagged_macro_data <- na.omit(xts::lag.xts(macro_data, k = -1))
+  macro_original_colnames <- colnames(macro_data)
+  lagged_macro_data <- na.omit(xts::lag.xts(macro_data, k = 1))
 
   # 4. Model fitting
-  fitted_rsbvar_model <- NULL
-  fitted_dcc_garch_model <- NULL
-  # Wrap model fitting in tryCatch to fail fast and return informative placeholder
-  try({
-    fitted_rsbvar_model <- tryCatch(
-      fit_rsbvar_model(macro_data = lagged_macro_data, bvar_lags = app_config$default$models$bvar_lags, app_config = app_config),
-      error = function(e) { message("fit_rsbvar_model failed: ", e$message); return(NULL) }
-    )
-  }, silent = TRUE)
+  fitted_rsbvar_output <- tryCatch(
+    fit_rsbvar_model(macro_data = lagged_macro_data, bvar_lags = app_config$default$models$bvar_lags, app_config = app_config),
+    error = function(e) { message("fit_rsbvar_model failed: ", e$message); return(NULL) }
+  )
 
+  fitted_rsbvar_model <- if (!is.null(fitted_rsbvar_output)) fitted_rsbvar_output$fitted_model else NULL
+  fitted_rsbvar_spec <- if (!is.null(fitted_rsbvar_output)) fitted_rsbvar_output$spec else NULL
 
+  fitted_dcc_garch_model <- tryCatch(
+    fit_dcc_t_garch_model(asset_returns, app_config = app_config),
+    error = function(e) { message("fit_dcc_t_garch_model failed: ", e$message); return(NULL) }
+  )
 
-    fitted_dcc_garch_model <- tryCatch(
-      fit_dcc_t_garch_model(asset_returns, app_config = app_config),
-      error = function(e) { message("fit_dcc_t_garch_model failed: ", e$message); return(NULL) }
-    )
-
-  fitted_generative_model <- list(rsbvar_model = fitted_rsbvar_model, dcc_garch_model = fitted_dcc_garch_model)
+  fitted_generative_model <- list(
+    rsbvar_fitted_model = fitted_rsbvar_model,
+    rsbvar_spec = fitted_rsbvar_spec,
+    macro_original_colnames = macro_original_colnames, # Add original macro column names
+    dcc_garch_model = fitted_dcc_garch_model
+  )
 
   # 5. Scenario generation
   last_historical_data_levels <- tail(raw_data, 1)
@@ -48,7 +50,8 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
       n_sim = app_config$default$n_simulations,
       horizon = app_config$default$horizon_months,
       asset_metadata = asset_metadata,
-      last_historical_levels = last_historical_data_levels
+      last_historical_levels = last_historical_data_levels,
+      app_config = app_config
     ),
     error = function(e) {
       message("generate_full_scenarios failed: ", e$message)

@@ -18,13 +18,22 @@ library(dplyr) # For lag, slice
 #'   for all series (macro and asset) to be used as starting points for inverse transformations.
 #' @return A list of 3D arrays with named elements `macro_scenarios` and `asset_scenarios`,
 #'   each of dimensions `n_sim x horizon x n_variables`, with values in original levels/returns.
-generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, asset_metadata, last_historical_levels) {
+generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, asset_metadata, last_historical_levels, app_config) {
   
   # Ensure reproducibility
   set.seed(123)
   
-  rsbvar_model <- fitted_generative_model$rsbvar_model
+  rsbvar_fitted_model <- fitted_generative_model$rsbvar_fitted_model
+  rsbvar_spec <- fitted_generative_model$rsbvar_spec
+  macro_original_colnames <- fitted_generative_model$macro_original_colnames
   dcc_garch_model <- fitted_generative_model$dcc_garch_model
+
+  # --- DEBUGGING START ---
+  message("DEBUG: class(rsbvar_fitted_model): ", paste(class(rsbvar_fitted_model), collapse = ", "))
+  message("DEBUG: class(rsbvar_spec): ", paste(class(rsbvar_spec), collapse = ", "))
+  message("DEBUG: macro_original_colnames: ", paste(macro_original_colnames, collapse = ", "))
+  message("DEBUG: class(dcc_garch_model): ", paste(class(dcc_garch_model), collapse = ", "))
+  # --- DEBUGGING END ---
 
   # Basic input validation
   if (is.null(asset_metadata) || NROW(asset_metadata) == 0) stop("asset_metadata must be provided and non-empty")
@@ -33,14 +42,16 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   # --- 1. Simulate Macro Variables if RS-BVAR model is provided ---
   macro_scenarios_array <- NULL # Initialize macro scenarios as NULL
   macro_var_names <- NULL
-  if (!is.null(rsbvar_model) && inherits(rsbvar_model, "bsvars_rsbvar_obj")) { # Check for specific class
-    message("Simulating macro scenarios from RS-BVAR model...")
-    macro_var_names <- colnames(rsbvar_model$Y)
+  if (!is.null(rsbvar_fitted_model) && inherits(rsbvar_fitted_model, "PosteriorBSVARMSH")) { # Check for specific class
+    message("DEBUG: Simulating macro scenarios from RS-BVAR model...")
+    macro_var_names <- macro_original_colnames # Use the original column names
+    message("DEBUG: macro_var_names (from original colnames): ", paste(macro_var_names, collapse = ", "))
+    message("DEBUG: Class of rsbvar_spec$get_data_matrices()$Y: ", paste(class(rsbvar_spec$get_data_matrices()$Y), collapse = ", "))
     n_macro_vars <- length(macro_var_names)
     
     # Use the forecast method for the bsvars object
     rsbvar_forecasts <- bsvars::forecast(
-      object = rsbvar_model,
+      rsbvar_fitted_model,
       horizon = horizon
     )
     
@@ -70,7 +81,19 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
 
     for (j in 1:n_macro_vars) {
       ticker <- macro_var_names[j]
-      transform_name <- asset_metadata %>% dplyr::filter(ticker == !!ticker) %>% dplyr::pull(transform_name) %>% dplyr::first()
+      message("DEBUG: Processing macro ticker for inverse transform: ", ticker)
+      
+      filter_result <- asset_metadata %>% dplyr::filter(ticker == !!ticker)
+      if (NROW(filter_result) == 0) {
+        stop(paste0("Macro ticker '", ticker, "' not found in asset_metadata for inverse transformation."))
+      }
+      
+      transform_name <- filter_result %>% dplyr::pull(transform_name) %>% dplyr::first()
+      message("DEBUG: transform_name for ", ticker, ": ", transform_name)
+      
+      if (is.null(transform_name) || length(transform_name) == 0) {
+        stop(paste0("transform_name for macro ticker '", ticker, "' is NULL or empty."))
+      }
 
       for (s in 1:n_sim) {
         sim_series <- as.numeric(macro_sims_transformed[s, , j])
@@ -89,6 +112,8 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   } else {
     message("RS-BVAR model not provided or not of expected type. Skipping macro scenario simulation.")
     # macro_scenarios_array remains NULL
+  } # Closing brace for the else block
+
 
 
 
@@ -96,10 +121,32 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   # --- 2. Simulate Asset Returns from DCC-GARCH (This part is mandatory) ---
   message("Simulating asset scenarios from DCC-GARCH model...")
 
+  # Add debug prints and checks for dcc_garch_model components
+  message("DEBUG: Class of dcc_garch_model: ", paste(class(dcc_garch_model), collapse = ", "))
+  if (is.null(dcc_garch_model)) {
+    stop("DCC-GARCH model is NULL before extracting asset names.")
+  }
+  
+  message("DEBUG: Class of dcc_garch_model@model: ", paste(class(dcc_garch_model@model), collapse = ", "))
+  if (is.null(dcc_garch_model@model)) {
+    stop("dcc_garch_model@model is NULL before extracting asset names.")
+  }
+
+  message("DEBUG: Class of dcc_garch_model@model$modeldata: ", paste(class(dcc_garch_model@model$modeldata), collapse = ", "))
+  if (is.null(dcc_garch_model@model$modeldata)) {
+    stop("dcc_garch_model@model$modeldata is NULL before extracting asset names.")
+  }
+
+  message("DEBUG: Class of dcc_garch_model@model$modeldata$data: ", paste(class(dcc_garch_model@model$modeldata$data), collapse = ", "))
+  if (is.null(dcc_garch_model@model$modeldata$data)) {
+    stop("dcc_garch_model@model$modeldata$data is NULL or malformed before extracting asset names.")
+  }
+  message("DEBUG: dim(dcc_garch_model@model$modeldata$data): ", paste(dim(dcc_garch_model@model$modeldata$data), collapse = ", "))
+
   # Get number of assets and asset names from the fitted model's data
-  # The actual data is in dcc_garch_model@model$modeldata@data
-  n_assets <- ncol(dcc_garch_model@model$modeldata@data)
-  asset_var_names <- colnames(dcc_garch_model@model$modeldata@data)
+  # The actual data is in dcc_garch_model@model$modeldata$data
+  n_assets <- ncol(dcc_garch_model@model$modeldata$data)
+  asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
   
   asset_sims_transformed <- array(NA, dim = c(n_sim, horizon, n_assets))
   dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names) # Assign dimnames after creation
@@ -115,23 +162,44 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
       # prereturns, presigma, preresiduals, preQ, preZ etc. will be automatically derived from the last observation of the fitted model
     )
     
+    # --- DEBUGGING START ---
+    message(paste0("DEBUG: Iteration ", i, ": class(sim): ", paste(class(sim), collapse = ", ")))
+    message(paste0("DEBUG: Iteration ", i, ": slotNames(sim): ", paste(slotNames(sim), collapse = ", ")))
+    debug_file_path <- file.path(app_config$default$cache_dir, paste0("dccsim_output_iter_", i, ".rds"))
+    saveRDS(sim, debug_file_path)
+    message(paste0("DEBUG: Iteration ", i, ": sim object saved to ", debug_file_path))
+    message(paste0("DEBUG: Iteration ", i, ": dim(sim@msim$simX[[1]]): ", paste(dim(sim@msim$simX[[1]]), collapse = ", ")))
+    message(paste0("DEBUG: Iteration ", i, ": dim(asset_sims_transformed): ", paste(dim(asset_sims_transformed), collapse = ", ")))
+    # --- DEBUGGING END ---
+    
     # Extract simulated series (returns)
-    # sim@simulation$series[[1]] is a matrix `horizon x n_assets`.
-    asset_sims_transformed[i, , ] <- sim@simulation$series[[1]]
+    # The actual simulated series for a DCCsim object are in the @msim slot.
+    asset_sims_transformed[i, , ] <- sim@msim$simX[[1]]
   }
   
-  # Apply inverse transformations for asset scenarios (log returns -> simple returns)
+  message("DEBUG: Starting asset inverse transformations.")
+  message("DEBUG: asset_var_names: ", paste(asset_var_names, collapse = ", "))
+  
   asset_scenarios_reconstructed <- array(NA, dim = dim(asset_sims_transformed))
   dimnames(asset_scenarios_reconstructed) <- dimnames(asset_sims_transformed)
 
   for (j in 1:n_assets) {
     ticker <- asset_var_names[j]
+    message("DEBUG: Processing asset ticker for inverse transform: ", ticker)
     for (s in 1:n_sim) {
       sim_series <- as.numeric(asset_sims_transformed[s, , j])
-      asset_scenarios_reconstructed[s, , j] <- reconstruct_asset_returns_from_log(sim_series)
+      message("DEBUG: sim_series class: ", class(sim_series), ", head: ", paste(head(sim_series), collapse = ", "))
+      
+      reconstructed_series <- reconstruct_asset_returns_from_log(sim_series)
+      message("DEBUG: reconstructed_series class: ", class(reconstructed_series), ", head: ", paste(head(reconstructed_series), collapse = ", "))
+      
+      asset_scenarios_reconstructed[s, , j] <- reconstructed_series
     }
   }
   asset_scenarios_array <- asset_scenarios_reconstructed
+  
+  message("DEBUG: asset_scenarios_array class: ", class(asset_scenarios_array), ", dim: ", paste(dim(asset_scenarios_array), collapse = ", "))
+  message("DEBUG: macro_scenarios_array class: ", class(macro_scenarios_array), ", dim: ", paste(dim(macro_scenarios_array), collapse = ", "))
   
   message("Full scenarios generated successfully.")
   
