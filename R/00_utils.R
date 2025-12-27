@@ -1,3 +1,5 @@
+options(xts.warn_dplyr_breaks_lag = FALSE)
+
 library(ggplot2)
 library(patchwork) # For combining ggplot2 plots
 library(xts)       # For time series operations like index()
