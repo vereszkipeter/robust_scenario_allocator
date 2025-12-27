@@ -31,6 +31,7 @@ download_and_cache_series <- function(ticker, source, cache_dir, from, to) {
     data <- readRDS(cache_file)
   } else {
     message("Downloading ", ticker, " from ", source, "...")
+    message("DEBUG: (download_and_cache_series) Fetching ", ticker, " from ", from, " to ", to)
     if (source == "Yahoo") {
       data_env <- new.env()
       tryCatch({
@@ -56,6 +57,7 @@ download_and_cache_series <- function(ticker, source, cache_dir, from, to) {
         data <- NULL
       })
     } else if (source == "FRED") {
+      message("DEBUG: (download_and_cache_series) Fetching ", ticker, " from ", from, " to ", to)
       tryCatch({
         fred_data <- tryCatch(
           fredr::fredr_series_observations(
@@ -87,6 +89,9 @@ download_and_cache_series <- function(ticker, source, cache_dir, from, to) {
     }
     
     if (!is.null(data)) {
+      message("DEBUG: (download_and_cache_series) Ticker: ", ticker, 
+              " - NROW(final data): ", NROW(data),
+              ", Date Range: ", format(start(data), "%Y-%m-%d"), " to ", format(end(data), "%Y-%m-%d"))
       saveRDS(data, cache_file)
     }
   }
@@ -129,8 +134,6 @@ get_all_raw_data <- function(asset_metadata, cache_dir, from, to) {
   if (length(all_data_list) > 0) {
     # Use do.call(merge, ...) to merge multiple xts objects
     merged_data <- do.call(merge, all_data_list)
-    # Remove rows with any NA values that might result from different start dates
-    merged_data <- na.omit(merged_data)
   } else {
     stop("No data could be downloaded or loaded.")
   }
@@ -161,6 +164,7 @@ apply_transformations <- function(raw_data, asset_metadata, window_to_date) {
     }
 
     series <- raw_data[, ticker] # This is the original daily/raw data for the ticker
+    message("DEBUG: (Step 1) Ticker: ", ticker, ", NROW(raw_data series): ", NROW(series))
 
     # Ensure data is monthly before applying transformations like log_return or mom_change
     # For Yahoo (prices), get monthly *levels* (last day of month price) first
@@ -175,12 +179,12 @@ apply_transformations <- function(raw_data, asset_metadata, window_to_date) {
             monthly_levels <- series
         }
     }
+    message("DEBUG: (Step 2) Ticker: ", ticker, ", NROW(monthly_levels before incomplete month check): ", NROW(monthly_levels))
 
     # IMPORTANT: Check for incomplete last month and drop if necessary
     # `window_to_date` is the actual end date of the window, so we compare it with the end of the month
     if (!is.null(window_to_date) && NROW(monthly_levels) > 0) {
       last_date_in_monthly_levels <- index(tail(monthly_levels, 1))
-      # Check if the window_to_date is before the true end of the month for the last observation
       # Use `ceiling_date` to find the end of the month containing window_to_date
       end_of_month_for_window_to_date <- lubridate::ceiling_date(as.Date(window_to_date), "month") - lubridate::days(1)
 
@@ -190,13 +194,15 @@ apply_transformations <- function(raw_data, asset_metadata, window_to_date) {
         if (lubridate::month(last_date_in_monthly_levels) == lubridate::month(window_to_date) &&
             lubridate::year(last_date_in_monthly_levels) == lubridate::year(window_to_date)) {
           monthly_levels <- head(monthly_levels, -1)
-          message("Dropped incomplete last month for ticker: ", ticker, ". Last full month is up to: ", index(tail(monthly_levels, 1)))
+          message("DEBUG: Dropped incomplete last month for ticker: ", ticker, ". Last full month is up to: ", index(tail(monthly_levels, 1)))
         }
       }
     }
+    message("DEBUG: (Step 3) Ticker: ", ticker, ", NROW(monthly_levels after incomplete month check): ", NROW(monthly_levels))
     
     # Apply transformation function to the monthly levels
     transformed_series <- transform_func(monthly_levels)
+    message("DEBUG: (Step 4) Ticker: ", ticker, ", NROW(transformed_series): ", NROW(transformed_series))
     
     # Ensure column name is correct
     colnames(transformed_series) <- ticker 
@@ -204,10 +210,13 @@ apply_transformations <- function(raw_data, asset_metadata, window_to_date) {
   }
   
   if (length(transformed_list) > 0) {
+    message("DEBUG: (Step 5) NROW(transformed_list items before merge): ", paste(sapply(transformed_list, NROW), collapse = ", "))
     # Merge all transformed xts objects. They should be monthly and aligned.
     merged_transformed_data <- do.call(merge, transformed_list)
+    message("DEBUG: (Step 6) NROW(merged_transformed_data before na.omit): ", NROW(merged_transformed_data))
     # Remove any NAs introduced by transformations (e.g., lag) or merging (due to different start dates)
-    merged_transformed_data <- na.omit(merged_transformed_data)
+    merged_transformed_data <- na.omit(merged_transformed_data) # Re-enabled na.omit
+    message("DEBUG: (Step 7) NROW(merged_transformed_data after na.omit): ", NROW(merged_transformed_data))
   } else {
     stop("No data could be transformed.")
   }
