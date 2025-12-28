@@ -21,31 +21,57 @@ reconstruct_macro_series <- function(sim_series, original_transform, last_level)
   }
 
   reconstructed <- numeric(horizon)
+  lname <- tolower(name)
 
-  if (grepl("log_return", name)) {
+  # Log-level transform (e.g., log_transform -> inverse is exp)
+  if (grepl("log", lname) && grepl("transform", lname) || grepl("log[_\\.-]?trans", lname)) {
+    reconstructed <- as.numeric(exp(as.numeric(sim_series)))
+
+  # Log-returns (many naming variants: log_return, log.return, log_returns, etc.)
+  } else if ((grepl("log", lname) && grepl("return", lname)) || grepl("log[_\\.-]?ret", lname)) {
     multipliers <- exp(as.numeric(sim_series))
     reconstructed[1] <- last_level * multipliers[1]
     if (horizon > 1) {
       for (t in 2:horizon) reconstructed[t] <- reconstructed[t-1] * multipliers[t]
     }
-  } else if (grepl("mom_change", name)) {
+
+  # Month-over-month or annual changes represented as relative changes
+  } else if (grepl("mom", lname) || (grepl("month", lname) && grepl("change", lname)) || (grepl("annual", lname) && grepl("change", lname)) || grepl("_change", lname)) {
     multipliers <- 1 + as.numeric(sim_series)
     reconstructed[1] <- last_level * multipliers[1]
     if (horizon > 1) {
       for (t in 2:horizon) reconstructed[t] <- reconstructed[t-1] * multipliers[t]
     }
-  } else if (grepl("identity", name) || grepl("level", name)) {
-    # Simulated values are already levels/rates
+
+  # Identity / already-level series (rates or levels)
+  } else if (grepl("identity", lname) || grepl("^level$", lname) || grepl("rate", lname)) {
     reconstructed <- as.numeric(sim_series)
+
   } else {
-    # Fallback: try applying inverse transform if it's a function
+    # Fallback: if original_transform was a function and an inverse exists, try it
     if (is.function(original_transform)) {
-      # We expect an inverse_transform to be supplied elsewhere; best-effort fallback
-      reconstructed <- as.numeric(sim_series)
-      warning("Unknown original_transform; returning simulated values directly.")
+      # Try common inverse naming conventions e.g., undo_<name>
+      inv_name1 <- paste0("undo_", name)
+      inv_name2 <- paste0("undo_", lname)
+      inv_fun <- NULL
+      if (exists(inv_name1, mode = "function", inherits = TRUE)) inv_fun <- get(inv_name1, mode = "function", inherits = TRUE)
+      if (is.null(inv_fun) && exists(inv_name2, mode = "function", inherits = TRUE)) inv_fun <- get(inv_name2, mode = "function", inherits = TRUE)
+
+      if (!is.null(inv_fun) && is.function(inv_fun)) {
+        # Call inverse function with best-effort signature
+        reconstructed <- tryCatch({
+          inv_fun(sim_series, last_level)
+        }, error = function(e) {
+          warning("Inverse transform function '", inv_name1, "'/'", inv_name2, "' failed; returning simulated values. Error: ", e$message)
+          as.numeric(sim_series)
+        })
+      } else {
+        reconstructed <- as.numeric(sim_series)
+        warning("Unknown original_transform; returning simulated values directly. (tried names: ", name, ", ", lname, ")")
+      }
     } else {
       reconstructed <- as.numeric(sim_series)
-      warning("Unknown transform name; returning simulated values directly.")
+      warning("Unknown transform name; returning simulated values directly. (", name, ")")
     }
   }
 

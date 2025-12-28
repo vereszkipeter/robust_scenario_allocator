@@ -18,16 +18,20 @@ library(dplyr) # For lag, slice
 #'   for all series (macro and asset) to be used as starting points for inverse transformations.
 #' @return A list of 3D arrays with named elements `macro_scenarios` and `asset_scenarios`,
 #'   each of dimensions `n_sim x horizon x n_variables`, with values in original levels/returns.
-generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, asset_metadata, last_historical_levels, app_config) {
+generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, asset_metadata, last_historical_levels, app_config, seed = NULL) {
   
   # Ensure reproducibility
   # set.seed(123) # Removed to avoid conflicts with targets' seed management and internal package seeding
+  if (is.null(seed)) {
+    seed <- get_valid_seed()
+  }
+  set.seed(seed)
   
   rsbvar_fitted_model <- fitted_generative_model$rsbvar_fitted_model
   rsbvar_spec <- fitted_generative_model$rsbvar_spec
   macro_original_colnames <- fitted_generative_model$macro_original_colnames
   dcc_garch_model <- fitted_generative_model$dcc_garch_model
-
+# browser()
   # --- DEBUGGING START ---
   message("DEBUG: class(rsbvar_fitted_model): ", paste(class(rsbvar_fitted_model), collapse = ", "))
   message("DEBUG: class(rsbvar_spec): ", paste(class(rsbvar_spec), collapse = ", "))
@@ -66,6 +70,22 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     macro_forecasts_raw <- aperm(rsbvar_forecasts$forecasts, c(3, 2, 1))
     
     n_draws_available <- dim(macro_forecasts_raw)[1]
+
+    # Basic sanity checks for MCMC forecast draws: ensure no extreme or non-finite values
+    any_nonfinite <- any(!is.finite(macro_forecasts_raw))
+    any_large <- any(abs(macro_forecasts_raw) > 1e6)
+    if (any_nonfinite || any_large) {
+      warning("RS-BVAR forecast draws contain non-finite or extremely large values. This may indicate MCMC divergence or model misspecification. Skipping macro scenario reconstruction for this window.")
+      # Create an NA-filled transformed array so later code handles missing macro scenarios gracefully
+      macro_sims_transformed <- array(NA_real_, dim = c(n_sim, horizon, n_macro_vars))
+      dimnames(macro_sims_transformed)[[3]] <- macro_var_names
+      macro_scenarios_array <- array(NA_real_, dim = dim(macro_sims_transformed))
+      dimnames(macro_scenarios_array) <- dimnames(macro_sims_transformed)
+      # Skip further macro reconstruction
+      goto_skip_macro <- TRUE
+    } else {
+      goto_skip_macro <- FALSE
+    }
     
     if (n_sim > n_draws_available) {
       warning(paste0("Number of requested simulations (", n_sim, ") exceeds available RS-BVAR forecast draws (", n_draws_available, "). Sampling with replacement."))
@@ -84,43 +104,47 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     macro_scenarios_reconstructed <- array(NA, dim = dim(macro_sims_transformed))
     dimnames(macro_scenarios_reconstructed) <- dimnames(macro_sims_transformed)
 
-    for (j in 1:n_macro_vars) {
-      ticker <- macro_var_names[j]
-      message("DEBUG: Processing macro ticker for inverse transform: ", ticker)
-      
-      filter_result <- asset_metadata %>% dplyr::filter(ticker == !!ticker)
-      if (NROW(filter_result) == 0) {
-        stop(paste0("Macro ticker '", ticker, "' not found in asset_metadata for inverse transformation."))
-      }
-      
-      transform_name <- filter_result %>% dplyr::pull(transform_name) %>% dplyr::first()
-      message("DEBUG: transform_name for ", ticker, ": ", transform_name)
-      
-      if (is.null(transform_name) || length(transform_name) == 0) {
-        stop(paste0("transform_name for macro ticker '", ticker, "' is NULL or empty."))
-      }
+    if (!exists("goto_skip_macro") || !isTRUE(goto_skip_macro)) {
+      for (j in 1:n_macro_vars) {
+        ticker <- macro_var_names[j]
+        message("DEBUG: Processing macro ticker for inverse transform: ", ticker)
 
-      for (s in 1:n_sim) {
-        sim_series <- as.numeric(macro_sims_transformed[s, , j])
-        last_level <- if (!is.null(last_historical_levels) && ticker %in% colnames(last_historical_levels)) {
-          as.numeric(tail(last_historical_levels[, ticker], 1))
-        } else {
-          NA_real_
+        filter_result <- asset_metadata %>% dplyr::filter(ticker == !!ticker)
+        if (NROW(filter_result) == 0) {
+          stop(paste0("Macro ticker '", ticker, "' not found in asset_metadata for inverse transformation."))
         }
 
-        message("DEBUG: Ticker: ", ticker, ", last_level for reconstruction: ", last_level)
-        message("DEBUG: Raw simulated series (sim_series) for ", ticker, ":")
-        print(summary(sim_series))
-        message("DEBUG: any(is.na(sim_series)) for ", ticker, ": ", any(is.na(sim_series)))
-        message("DEBUG: any(is.nan(sim_series)) for ", ticker, ": ", any(is.nan(sim_series)))
-        message("DEBUG: any(is.infinite(sim_series)) for ", ticker, ": ", any(is.infinite(sim_series)))
-        
-        reconstructed_series <- reconstruct_macro_series(sim_series = sim_series, original_transform = transform_name, last_level = last_level)
-        message("DEBUG: Ticker: ", ticker, ", reconstructed_series sum(is.na): ", sum(is.na(reconstructed_series)))
-        macro_scenarios_reconstructed[s, , j] <- reconstructed_series
+        transform_name <- filter_result %>% dplyr::pull(transform_name) %>% dplyr::first()
+        message("DEBUG: transform_name for ", ticker, ": ", transform_name)
+
+        if (is.null(transform_name) || length(transform_name) == 0) {
+          stop(paste0("transform_name for macro ticker '", ticker, "' is NULL or empty."))
+        }
+
+        for (s in 1:n_sim) {
+          sim_series <- as.numeric(macro_sims_transformed[s, , j])
+          last_level <- if (!is.null(last_historical_levels) && ticker %in% colnames(last_historical_levels)) {
+            as.numeric(tail(last_historical_levels[, ticker], 1))
+          } else {
+            NA_real_
+          }
+
+          message("DEBUG: Ticker: ", ticker, ", last_level for reconstruction: ", last_level)
+          message("DEBUG: Raw simulated series (sim_series) for ", ticker, ":")
+          print(summary(sim_series))
+          message("DEBUG: any(is.na(sim_series)) for ", ticker, ": ", any(is.na(sim_series)))
+          message("DEBUG: any(is.nan(sim_series)) for ", ticker, ": ", any(is.nan(sim_series)))
+          message("DEBUG: any(is.infinite(sim_series)) for ", ticker, ": ", any(is.infinite(sim_series)))
+
+          reconstructed_series <- reconstruct_macro_series(sim_series = sim_series, original_transform = transform_name, last_level = last_level)
+          message("DEBUG: Ticker: ", ticker, ", reconstructed_series sum(is.na): ", sum(is.na(reconstructed_series)))
+          macro_scenarios_reconstructed[s, , j] <- reconstructed_series
+        }
       }
+      macro_scenarios_array <- macro_scenarios_reconstructed
+    } else {
+      message("Macro scenarios skipped due to RS-BVAR forecast diagnostic failure.")
     }
-    macro_scenarios_array <- macro_scenarios_reconstructed
 
   } else {
     message("RS-BVAR model not provided or not of expected type. Skipping macro scenario simulation.")
@@ -176,27 +200,18 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     asset_sims_transformed <- array(NA, dim = c(n_sim, horizon, n_assets))
     dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names) # Assign dimnames after creation
 
-    # Perform a single simulation call for all n_sim simulations
-    sim_all <- rmgarch::dccsim(
-      dcc_garch_model,
-      n.sim = horizon,
-      m.sim = n_sim, # Generate all n_sim simulations at once
-      startMethod = "unconditional"
-    )
-    print("DEBUG: After dccsim call ---------------------")
-    print(paste0("DEBUG: class(sim_all): ", paste(class(sim_all), collapse = ", ")))
-    print(paste0("DEBUG: is.null(sim_all): ", is.null(sim_all)))
-    print(paste0("DEBUG: is.null(sim_all@msim): ", is.null(sim_all@msim)))
-    if (!is.null(sim_all@msim)) {
-      print(paste0("DEBUG: class(sim_all@msim$simX): ", paste(class(sim_all@msim$simX), collapse = ", ")))
-      print(paste0("DEBUG: length(sim_all@msim$simX): ", length(sim_all@msim$simX)))
-      if (is.list(sim_all@msim$simX) && length(sim_all@msim$simX) > 0) {
-        print(paste0("DEBUG: class(sim_all@msim$simX[[1]]): ", paste(class(sim_all@msim$simX[[1]]), collapse = ", ")))
-        print(paste0("DEBUG: dim(sim_all@msim$simX[[1]]): ", paste(dim(sim_all@msim$simX[[1]]), collapse = "x")))
-      } else if (!is.null(sim_all@msim$simX)) { # This case handles if simX is not a list but a matrix directly
-        print(paste0("DEBUG: dim(sim_all@msim$simX): ", paste(dim(sim_all@msim$simX), collapse = "x")))
-      }
-    }
+        # --- New: Prepare arguments for dccsim with optional seed ---
+
+        dccsim_args <- list(
+          fitORspec = dcc_garch_model,
+          n.sim = horizon,
+          m.sim = n_sim,
+          startMethod = "unconditional",
+          rseed = seed
+        )
+        
+        # Perform a single simulation call for all n_sim simulations using do.call
+        sim_all <- do.call(rmgarch::dccsim, dccsim_args)
     print("DEBUG: str(sim_all) ----------------------------")
     str(sim_all)
     print("DEBUG: End dccsim inspection --------------------")

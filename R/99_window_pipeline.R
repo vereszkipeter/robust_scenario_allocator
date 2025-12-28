@@ -10,9 +10,9 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   monthly_returns <- apply_transformations(raw_data_list = current_window_raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
   message("DEBUG: NROW(monthly_returns) after transformations: ", NROW(monthly_returns))
   split_data <- split_data_by_type(monthly_returns, asset_metadata)
-  asset_returns <- split_data$asset_returns
+  asset_returns <- split_data$asset_returns |> na.omit() # Message to LLM: first row is NA what breaks subsequent calculations
   message("DEBUG: NROW(asset_returns) before DCC-GARCH: ", NROW(asset_returns))
-  macro_data <- split_data$macro_data
+  macro_data <- split_data$macro_data |> na.omit() # Message to LLM: some rows can be NAs what breaks subsequent calculations
   message("DEBUG: Column names in monthly_returns: ", paste(colnames(monthly_returns), collapse = ", "))
   message("DEBUG: Column names in macro_data before lagging: ", paste(colnames(macro_data), collapse = ", "))
 
@@ -119,7 +119,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
       return(list(macro_scenarios = NULL, asset_scenarios = array(0, dim = c(app_config$default$n_simulations, app_config$default$horizon_months, ncol(asset_returns)), dimnames = list(NULL, NULL, colnames(asset_returns)))))
     }
   )
-
+# browser()
   # If simulated_scenarios is NULL or malformed, ensure a valid placeholder
   if (is.null(simulated_scenarios) || is.null(simulated_scenarios$asset_scenarios)) {
     message("Simulated scenarios missing or malformed; creating placeholder zero-return scenarios.")

@@ -17,9 +17,13 @@ calculate_implied_equilibrium_returns <- function(erc_weights, asset_returns, ri
   # This function assumes erc_weights are already named correctly.
   
   # Calculate asset covariance matrix. Use Ledoit-Wolf shrinkage for robustness.
-  # cov() in R calculates sample covariance. For implied returns, robust estimation is preferred.
-  # The cov.shrink function from MASS package is suitable.
-  asset_cov_matrix <- corpcor::cov.shrink(asset_returns, verbose = FALSE)
+  # Ensure missing values are handled: drop rows with any NA before estimating covariance.
+  if (any(is.na(asset_returns))) {
+    asset_returns <- stats::na.omit(asset_returns)
+    if (NROW(asset_returns) == 0) stop("All rows removed after na.omit on asset_returns; cannot compute covariance.")
+  }
+  # cov.shrink from corpcor provides shrinkage estimation
+  asset_cov_matrix <- corpcor::cov.shrink(as.matrix(asset_returns), verbose = FALSE)
   
   # Ensure asset_cov_matrix rows/cols align with erc_weights and asset_returns.
   # Assuming erc_weights are named.
@@ -128,7 +132,8 @@ apply_sequential_entropy_pooling <- function(simulated_scenarios, implied_equili
   p_new <- Variable(n_sim, pos = TRUE, name = "adjusted_probabilities")
   
   # 3. Objective: Minimize Kullback-Leibler divergence (Entropy Pooling)
-  objective <- Minimize(sum(p_new * log(p_new / p_prior)))
+  # Use CVXR's kl_div atom for a DCP-safe formulation: kl_div(x, y) = x * log(x / y)
+  objective <- Minimize(sum(kl_div(p_new, p_prior)))
   
   # 4. Constraints (Views)
   constraints <- list(
@@ -195,6 +200,11 @@ apply_sequential_entropy_pooling <- function(simulated_scenarios, implied_equili
 
   # Use safe CVXR wrapper; allow fallback to uniform probabilities on failure
   cvxr_res <- safe_solve_cvxr(problem, solvers = c("ECOS", "SCS"), allow_fallback = TRUE)
+
+  # If CVXR returned an error message, include diagnostic details in the warning
+  if (is.null(cvxr_res$result) && !is.null(cvxr_res$error)) {
+    warning("CVXR Entropy Pooling failed. Solver diagnostics: ", cvxr_res$error)
+  }
 
   # Check if CVXR solved successfully
   if (is.null(cvxr_res$result)) {

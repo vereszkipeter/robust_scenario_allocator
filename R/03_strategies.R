@@ -28,6 +28,7 @@ get_equal_weight_fallback <- function(R, strategy_name) {
 #' @param R An xts object of asset returns.
 #' @return A matrix representing the Ledoit-Wolf shrinkage covariance.
 calculate_lw_covariance <- function(R) {
+  # browser()
   cov_lw <- corpcor::cov.shrink(R, verbose = FALSE)
   return(cov_lw)
 }
@@ -74,9 +75,48 @@ calculate_min_cdar_weights <- function(asset_returns, app_config) {
   portf <- add.constraint(portf, type = "long_only")
   portf <- add.objective(portf, type = "risk", name = "CDaR", arguments = list(p = beta_cdar))
   
-  result <- try(optimize.portfolio(R = asset_returns, portfolio = portf, optimize_method = "ROI", trace = FALSE), silent = TRUE)
+  # Preprocess: remove rows with NA and ensure enough data
+  asset_returns_clean <- tryCatch({
+    stats::na.omit(asset_returns)
+  }, error = function(e) asset_returns)
+  if (NROW(asset_returns_clean) < 2 || NCOL(asset_returns_clean) < 1) {
+    warning("Insufficient data after na.omit for Min-CDaR; returning equal weights.")
+    return(get_equal_weight_fallback(asset_returns, "Min-CDaR"))
+  }
+
+  # Try methods in order: ROI, GLPK (if available), then randomized search as fallback
+  result <- try(optimize.portfolio(R = asset_returns_clean, portfolio = portf, optimize_method = "ROI", trace = FALSE), silent = TRUE)
 
   if (inherits(result, "try-error")) {
+    roi_msg <- as.character(result)
+    warning("Min-CDaR ROI attempt failed: ", roi_msg)
+
+    # Try GLPK if available (preferred LP solver)
+    if (requireNamespace("Rglpk", quietly = TRUE) || requireNamespace("ROI.plugin.glpk", quietly = TRUE)) {
+      warning("Attempting Min-CDaR with GLPK solver (optimize_method = 'glpk').")
+      result_glpk <- try(optimize.portfolio(R = asset_returns_clean, portfolio = portf, optimize_method = "glpk", trace = FALSE), silent = TRUE)
+      if (!inherits(result_glpk, "try-error")) {
+        weights <- PortfolioAnalytics::extractWeights(result_glpk)
+        return(as.numeric(weights))
+      } else {
+        warning("Min-CDaR GLPK attempt failed: ", as.character(result_glpk))
+      }
+    } else {
+      warning("GLPK not available; skipping GLPK attempt.")
+    }
+
+    # Fallback: randomized search to get an approximate solution
+    random_search_size <- tryCatch({
+      app_config$default$models$mincdar_random_search_size
+    }, error = function(e) 2000)
+    warning("Falling back to randomized search for Min-CDaR (search_size=", random_search_size, ").")
+    result_rand <- try(optimize.portfolio(R = asset_returns_clean, portfolio = portf, optimize_method = "random", search_size = as.integer(random_search_size), trace = FALSE), silent = TRUE)
+    if (!inherits(result_rand, "try-error")) {
+      weights <- PortfolioAnalytics::extractWeights(result_rand)
+      return(as.numeric(weights))
+    }
+
+    warning("All Min-CDaR optimization attempts failed; returning equal weights.")
     return(get_equal_weight_fallback(asset_returns, "Min-CDaR"))
   } else {
     weights <- PortfolioAnalytics::extractWeights(result)
@@ -113,8 +153,9 @@ calculate_hrp_weights <- function(asset_returns, app_config) {
 #' @return A vector of portfolio weights.
 calculate_erc_weights <- function(asset_returns) {
   cov_mat <- cov(asset_returns)
-  
-  result <- try(riskParityPortfolio::riskParityPortfolio(Sigma = cov_mat, b = rep(1, ncol(asset_returns))), silent = TRUE)
+  n <- ncol(asset_returns)
+  bvec <- rep(1 / n, n)
+  result <- try(riskParityPortfolio::riskParityPortfolio(Sigma = cov_mat, b = bvec), silent = TRUE)
 
   if (inherits(result, "try-error")) {
     return(get_equal_weight_fallback(asset_returns, "ERC"))

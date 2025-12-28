@@ -197,6 +197,7 @@ generate_global_validation_report <- function(all_window_results, app_config, ou
     if (is.null(res_wrapped$error)) {
       successful_results[[length(successful_results) + 1]] <- res_wrapped$result
     } else {
+      
       # Assuming window_id is always present in the result, even if partial
       window_id_failed <- if (!is.null(res_wrapped$result$window_id)) res_wrapped$result$window_id else "UNKNOWN"
       failed_windows_info[[length(failed_windows_info) + 1]] <- list(

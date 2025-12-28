@@ -197,8 +197,7 @@ apply_transformations <- function(raw_data_list, asset_metadata, window_to_date,
   panel_monthly <- merged_monthly |>
     na.locf() |> # Fill NAs after merging
     apply.monthly(last) |> # Ensure strict monthly periodicity
-    standardize_monthly_index(label = monthly_label) |>
-    head(-1)
+    standardize_monthly_index(label = monthly_label)
   
   message("DEBUG: Summary of panel_monthly before individual transformations:")
   print(summary(panel_monthly))
@@ -246,18 +245,21 @@ apply_transformations <- function(raw_data_list, asset_metadata, window_to_date,
     }
   }
 
-  if (length(transformed_list) > 0) {
+    if (length(transformed_list) > 0) {
     # The panel_monthly was already merged and handled NAs.
-    # We now just combine the transformed series, ensuring alignment.
-    # Using do.call(merge.xts, ...) is robust for this.
-    merged <- do.call(merge.xts, c(transformed_list, list(join = "outer")))
+    # Combine the transformed series robustly using pairwise Reduce to avoid
+    # warnings from merge.xts when providing 'join' to do.call with many objects.
+    if (length(transformed_list) == 1) {
+      merged <- transformed_list[[1]]
+    } else {
+      merged <- Reduce(function(x, y) merge(x, y, join = "outer"), transformed_list)
+    }
 
     # Ensure column names match tickers
     colnames(merged) <- names(transformed_list)
     # Remove columns that are entirely NA
-    all_na <- sapply(merged, function(col) all(is.na(col)))
+    all_na <- sapply(as.list(merged), function(col) all(is.na(col)))
     if (any(all_na)) {
-
       warning("The following series are all NA after transformation and will be dropped: ", paste(names(merged)[all_na], collapse = ", "))
       merged <- merged[, !all_na, drop = FALSE]
     }

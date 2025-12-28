@@ -358,11 +358,12 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
     macro_fan_chart_data <- macro_sims_long %>%
       group_by(MacroVar, Horizon) %>%
       summarise(
-        p10 = quantile(Value, 0.10, na.rm = TRUE),
-        p25 = quantile(Value, 0.25, na.rm = TRUE),
-        p50 = quantile(Value, 0.50, na.rm = TRUE),
-        p75 = quantile(Value, 0.75, na.rm = TRUE),
-        p90 = quantile(Value, 0.90, na.rm = TRUE)
+        p10 = if(all(is.na(Value))) NA_real_ else quantile(Value, 0.10, na.rm = TRUE),
+        p25 = if(all(is.na(Value))) NA_real_ else quantile(Value, 0.25, na.rm = TRUE),
+        p50 = if(all(is.na(Value))) NA_real_ else quantile(Value, 0.50, na.rm = TRUE),
+        p75 = if(all(is.na(Value))) NA_real_ else quantile(Value, 0.75, na.rm = TRUE),
+        p90 = if(all(is.na(Value))) NA_real_ else quantile(Value, 0.90, na.rm = TRUE),
+        .groups = 'drop'
       )
     
     for (macro_name in macro_names) {

@@ -102,3 +102,59 @@ safely_process_window <- function(...) {
     )
   })
 }
+
+
+#' Safe CVXR solver wrapper
+#' Tries a sequence of CVXR solvers and returns either the CVXR result (on success)
+#' or a structured list when `allow_fallback = TRUE`.
+#' @param problem CVXR Problem object
+#' @param solvers character vector of solver names to try in order
+#' @param allow_fallback logical; if TRUE return list(result=NULL,error=msg) on failure,
+#'        if FALSE then stop on failure
+#' @param verbose logical; print solver attempts
+#' @param solver_args list; additional named args passed to `CVXR::solve`
+#' @return If `allow_fallback = FALSE` returns CVXR result object on success.
+#'         If `allow_fallback = TRUE` returns list(result = CVXR_result_or_NULL, error = NULL_or_message)
+safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS"), allow_fallback = TRUE, verbose = FALSE, solver_args = list()) {
+  if (!requireNamespace("CVXR", quietly = TRUE)) {
+    msg <- "Package 'CVXR' is required for safe_solve_cvxr"
+    if (allow_fallback) return(list(result = NULL, error = msg)) else stop(msg)
+  }
+
+  errors <- list()
+  for (s in solvers) {
+    if (verbose) message("Trying CVXR solver: ", s)
+    attempt <- tryCatch({
+      # Construct positional args: first the problem object, then solver and any solver_args
+      args <- c(list(problem), list(solver = s), solver_args)
+      # Call CVXR::solve positionally to avoid named-argument mismatches
+      res <- do.call(CVXR::solve, args)
+      res
+    }, error = function(e) e)
+
+    if (inherits(attempt, "error")) {
+      errors[[s]] <- attempt$message
+      next
+    }
+
+    status <- NULL
+    if (!is.null(attempt$status)) status <- as.character(attempt$status)
+    # Accept optimal or optimal_inaccurate as success
+    if (!is.null(status) && tolower(status) %in% c("optimal", "optimal_inaccurate", "optimal_inaccurate")) {
+      if (allow_fallback) return(list(result = attempt, error = NULL)) else return(attempt)
+    }
+
+    # If solver returned something but not optimal, still accept when allow_fallback=FALSE
+    if (!is.null(status) && !allow_fallback) {
+      # return the result and let caller decide; this mirrors CVXR behavior
+      return(attempt)
+    }
+
+    # Record non-error solver result as warning
+    errors[[s]] <- paste0("status=", ifelse(is.null(status), "UNKNOWN", status))
+  }
+
+  # All solvers failed or none returned acceptable status
+  msg <- paste(names(errors), unlist(errors), sep = ": ", collapse = "; ")
+  if (allow_fallback) return(list(result = NULL, error = msg)) else stop(msg)
+}
