@@ -6,10 +6,8 @@ default:
       - "SPY"   # S&P 500 ETF
       - "AGG"   # Core US Aggregate Bond ETF
       - "GLD"   # Gold ETF
-      - "QQQ"   # Nasdaq 100 ETF
-      - "VIXCLS" # CBOE Volatility Index
     from: "2000-01-01"
-    to: "2023-12-31" # Using a fixed date for stability
+    to: "2025-12-27" # Using a fixed date for stability
   cache_dir: "data/cache" # Directory for caching downloaded raw data
 
   # Scenario Generation Parameters
@@ -31,6 +29,7 @@ default:
     rsbvar_tau: 0.1 # Prior parameter for bsvars (overall tightness)
     rsbvar_rho: 0.5 # Prior parameter for bsvars (cross-variable tightness)
     rsbvar_M: 2 # Number of regimes for the RS-BVAR
+    min_dcc_obs: 60 # Minimum observations required for DCC-GARCH models
 
     risk_aversion_param: 2.5 # Example risk aversion parameter for implied equilibrium returns
     short_rate_variable_name: "FEDFUNDS" # Federal Funds Effective Rate
@@ -43,8 +42,8 @@ default:
     tp_sensitivity: 0.5 # Sensitivity of term premium to short rate for placeholder model
     confidence_level: 0.95 # Confidence level for Probabilistic Sharpe Ratio and Deflated Sharpe Ratio
     transaction_cost_flat_rate: 0.001 # Flat rate transaction cost applied at rebalancing
-    dcc_solver: "solnp" # Solver for DCC-GARCH model (e.g., "solnp", "nlminb", "lbfgs", "gosolnp")
-    dcc_solver_control: {trace: 0} # Solver control options (e.g., {trace: 0} for solnp)
+    dcc_solver: "nlminb" # Solver for DCC-GARCH model (e.g., "solnp", "nlminb", "lbfgs", "gosolnp")
+    dcc_solver_control: {trace: 1} # Solver control options (e.g., {trace: 0} for solnp)
     # Add other model parameters here as needed
 
 # Future sections for models and optimization

@@ -31,7 +31,8 @@ tar_option_set(
     "corpcor",
     "ROI.plugin.glpk",
     "ROI.plugin.quadprog"
-  )
+  ),
+  seed = 123 # Set a global seed for reproducibility
 )
 
 # Main pipeline definition for targets
@@ -43,6 +44,15 @@ list(
     app_config,
     ensure_app_config_defaults(yaml::read_yaml("config.yml")),
     cue = tar_cue("always")
+  ),
+  tar_target(
+    all_raw_data,
+    get_all_raw_data(
+      asset_metadata = asset_metadata,
+      cache_dir = data_cache_dir,
+      from = app_config$default$data$from,
+      to = app_config$default$data$to
+    )
   ),
   
   # Ensure cache directory is created from config (Global)
@@ -63,7 +73,6 @@ list(
       app_config$default$data$tickers[1], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # SPY
       app_config$default$data$tickers[2], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # AGG
       app_config$default$data$tickers[3], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # GLD
-      app_config$default$data$tickers[4], "Yahoo", "Asset", "simple_return",      simple_return,      undo_simple_return, # QQQ
       "VIXCLS", "FRED", "Makro Változó", "log_transform", base::log, base::exp, # VIX
       "CPIAUCSL", "FRED", "Makro Változó", "mom_change",       mom_change,       undo_mom_change, # Inflation
       "FEDFUNDS", "FRED", "Makro Változó", "identity_transform", identity_transform, identity_transform_inverse, # Rates
@@ -71,10 +80,21 @@ list(
     )
   ),
   
+  tar_target(
+    panel_monthly_full,
+    apply_transformations(
+      raw_data_list = all_raw_data,
+      asset_metadata = asset_metadata,
+      # For the full panel, use the overall 'to' date from config as the window_to_date
+      window_to_date = as.Date(app_config$default$data$to), 
+      monthly_label = "end"
+    )
+  ),
+  
   # Map the pipeline over each walk-forward window
   tar_target(
     wf_windows,
-    generate_wf_windows(app_config)
+    generate_wf_windows(app_config, panel_monthly_full)
   ),
 
   tar_target(
@@ -90,7 +110,8 @@ list(
           oos_from_date = oos_from_date,
           oos_to_date = oos_to_date,
           app_config = app_config,
-          asset_metadata = asset_metadata
+          asset_metadata = asset_metadata,
+          all_raw_data = all_raw_data # Pass the new all_raw_data target
         )
       }
     )

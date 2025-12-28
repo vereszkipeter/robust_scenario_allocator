@@ -281,11 +281,11 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
     fan_chart_data <- sims_long %>%
       group_by(Asset, Horizon) %>%
       summarise(
-        p10 = quantile(Return, 0.10),
-        p25 = quantile(Return, 0.25),
-        p50 = quantile(Return, 0.50),
-        p75 = quantile(Return, 0.75),
-        p90 = quantile(Return, 0.90)
+        p10 = quantile(Return, 0.10, na.rm = TRUE),
+        p25 = quantile(Return, 0.25, na.rm = TRUE),
+        p50 = quantile(Return, 0.50, na.rm = TRUE),
+        p75 = quantile(Return, 0.75, na.rm = TRUE),
+        p90 = quantile(Return, 0.90, na.rm = TRUE)
       )
     
     # Plot fan chart for each asset
@@ -349,14 +349,20 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
       rename(Sim = Var1, Horizon = Var2, MacroVar = Var3) %>%
       mutate(Horizon = as.numeric(Horizon))
     
+    message("DEBUG: class(macro_sims_long$Value) before quantile: ", class(macro_sims_long$Value))
+    message("DEBUG: summary(macro_sims_long$Value) before quantile: \n", capture.output(summary(macro_sims_long$Value)))
+    message("DEBUG: any(is.na(macro_sims_long$Value)) before quantile: ", any(is.na(macro_sims_long$Value)))
+    message("DEBUG: any(is.nan(macro_sims_long$Value)) before quantile: ", any(is.nan(macro_sims_long$Value)))
+    message("DEBUG: any(is.infinite(macro_sims_long$Value)) before quantile: ", any(is.infinite(macro_sims_long$Value)))
+
     macro_fan_chart_data <- macro_sims_long %>%
       group_by(MacroVar, Horizon) %>%
       summarise(
-        p10 = quantile(Value, 0.10),
-        p25 = quantile(Value, 0.25),
-        p50 = quantile(Value, 0.50),
-        p75 = quantile(Value, 0.75),
-        p90 = quantile(Value, 0.90)
+        p10 = quantile(Value, 0.10, na.rm = TRUE),
+        p25 = quantile(Value, 0.25, na.rm = TRUE),
+        p50 = quantile(Value, 0.50, na.rm = TRUE),
+        p75 = quantile(Value, 0.75, na.rm = TRUE),
+        p90 = quantile(Value, 0.90, na.rm = TRUE)
       )
     
     for (macro_name in macro_names) {

@@ -21,9 +21,11 @@ if (is.na(fred_key) || nchar(fred_key) == 0) {
 	warning("FRED API key not found in keyring or FRED_API_KEY env var. Some FRED downloads may fail.")
 } else {
 	fredr::fredr_set_key(fred_key)
+    Sys.setenv(FRED_API_KEY = fred_key) # Set for child processes
 }
 
 # Run the pipeline
-cat("--- Running the Robust Scenario Allocator Pipeline ---\n")
+cat("-- Running the Robust Scenario Allocator Pipeline ---\n")
 targets::tar_make()
-cat("--- Pipeline execution finished. ---\n")
+cat("--- Pipeline execution finished. ---
+")

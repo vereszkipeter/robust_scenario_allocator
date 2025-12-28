@@ -16,9 +16,14 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   # bsvars expects a matrix or data.frame
   macro_matrix <- as.matrix(macro_data)
 
-  # Check if macro_matrix has enough observations for the given lags
-  if (nrow(macro_matrix) <= bvar_lags) {
-    stop("Not enough observations in macro_data for the specified bvar_lags.")
+  # Check for minimum column and row requirements for bsvars
+  if (NCOL(macro_matrix) < 2) {
+    message("WARNING: macro_data has less than 2 columns (", NCOL(macro_matrix), "). Skipping RS-BVAR model fitting as bsvars requires at least 2 variables.")
+    return(list(fitted_model = NULL, spec = NULL))
+  }
+  if (NROW(macro_matrix) < 3) { # bsvars::specify_bsvar_msh$new requires at least 3 rows
+    message("WARNING: macro_data has less than 3 rows (", NROW(macro_matrix), "). Skipping RS-BVAR model fitting as bsvars requires at least 3 observations.")
+    return(list(fitted_model = NULL, spec = NULL))
   }
   
   # Retrieve RS-BVAR parameters from app_config
@@ -106,44 +111,116 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
 #' @param asset_returns An xts object containing the asset returns time series.
 #' @return A fitted `DCCfit` object.
 fit_dcc_t_garch_model <- function(asset_returns, app_config) {
+  # Remove NAs from the input data
+  asset_returns <- na.omit(asset_returns)
+
+  # Save the input data for inspection
+  saveRDS(asset_returns, "dcc_input.rds")
+
   message("DEBUG: NROW(asset_returns) inside fit_dcc_t_garch_model: ", NROW(asset_returns))
-  # Define univariate GARCH specification for each asset
-  # Based on GEMINI.md: AR(1)-GJR-GARCH(1,1) with Skewed-t distribution
-  # Assuming AR(1) in mean, check if app_config provides this detail
-  # For now, let's use a simple AR(1) mean model.
-  # The uspec must be a list of ugarchspec objects or a multispec object.
-  
+
+  min_obs <- app_config$default$models$min_dcc_obs
+  # Basic validation
+  if (is.null(asset_returns) || NROW(asset_returns) < min_obs || NCOL(asset_returns) < 1) {
+    message("Insufficient data for DCC-GARCH fitting. Returning fallback with empirical moments.")
+    emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(asset_returns, na.rm = TRUE) else numeric(0)
+    emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  }
+
   num_assets <- ncol(asset_returns)
-  
-  # Create a list of ugarchspec objects, one for each asset
+
+  # Compute empirical moments for fallback
+  emp_mean <- colMeans(asset_returns, na.rm = TRUE)
+  emp_cov <- cov(as.matrix(asset_returns), use = "pairwise.complete.obs")
+
+  # --- Stage 1: Fit univariate GARCH models individually for diagnostics ---
+  for (i in 1:num_assets) {
+    asset_name <- colnames(asset_returns)[i]
+    message("--- Fitting univariate GARCH for asset: ", asset_name, " ---")
+
+    uspec <- rugarch::ugarchspec(
+      mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),
+      variance.model = list(model = "gjrGARCH", garchOrder = c(1, 1)),
+      distribution.model = "std"
+    )
+
+    # Fit the model for the single, NA-free series
+    fit <- tryCatch({
+      rugarch::ugarchfit(spec = uspec, data = asset_returns[, i, drop = TRUE], solver = app_config$default$models$dcc_solver)
+    }, error = function(e) {
+      message("ERROR: Univariate GARCH fit failed for asset: ", asset_name, "; will use empirical fallback.")
+      NULL
+    })
+
+    if (is.null(fit)) {
+      # Return a fallback object instead of stopping the whole pipeline
+      return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+    }
+  }
+  message("--- All univariate GARCH models fitted successfully. ---")
+
+  # --- Stage 2: If all univariate fits succeeded, proceed with DCC ---
+
   uspec_list <- lapply(1:num_assets, function(i) {
     rugarch::ugarchspec(
       mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),
       variance.model = list(model = "gjrGARCH", garchOrder = c(1, 1)),
-      distribution.model = "std" # Student-t distribution
+      distribution.model = "std"
     )
   })
-  
-  # Combine univariate specifications into a multispec object
   multi_uspec <- rugarch::multispec(uspec_list)
-  
-  # Define DCC specification
+  message("DEBUG: multi_uspec created.")
+  saveRDS(multi_uspec, "multi_uspec.rds") # Save multi_uspec for inspection
+
+  message("DEBUG: Calling dccspec.")
   dcc_spec <- rmgarch::dccspec(
     uspec = multi_uspec,
     dccOrder = c(1, 1),
-    # DCC(1,1) as per standard and snippets.md example
-    distribution = "mvt" # Multivariate Student-t distribution
+    distribution = "mvt" # Changed from "mvt" to "mvnorm"
   )
-  
-  # Fit the DCC-GARCH model
-  # dccfit can take an optional 'cluster' argument, which might be configured in app_config
-  dcc_fit_model <- rmgarch::dccfit(
-    dcc_spec,
-    data = asset_returns,
-    solver = app_config$default$models$dcc_solver,
-    # e.g., "solnp"
-    solver.control = app_config$default$models$dcc_solver_control
-  )
-  
+  saveRDS(dcc_spec, "dcc_spec.rds") # Save dcc_spec for inspection
+
+  message("DEBUG: Calling dccfit with data dimensions: ", paste(dim(asset_returns), collapse = ", "))
+  message("DEBUG: Summary of asset_returns before dccfit:")
+  print(summary(asset_returns))
+
+  # Additional data quality checks before dccfit
+  if (anyNA(asset_returns)) {
+    message("ERROR: NA values found in asset_returns just before dccfit. This should not happen after na.omit. Returning fallback.")
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  }
+  if (any(is.infinite(asset_returns))) {
+    message("ERROR: Infinite values found in asset_returns just before dccfit. Returning fallback.")
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  }
+  if (NROW(asset_returns) < min_obs || NCOL(asset_returns) < 1) {
+    message("ERROR: Insufficient data dimensions (", NROW(asset_returns), " rows, ", NCOL(asset_returns), " cols) in asset_returns just before dccfit. Returning fallback.")
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  }
+
+  message("DEBUG: Correlation matrix of asset_returns before dccfit:")
+  tryCatch({
+    print(cor(asset_returns, use = "pairwise.complete.obs"))
+  }, error = function(e) {
+    message("WARNING: Could not compute correlation matrix: ", e$message)
+  })
+
+  # Save the asset_returns data right before the dccfit call
+  saveRDS(asset_returns, "dcc_input_for_fit.rds")
+
+  dcc_fit_model <- tryCatch({
+    rmgarch::dccfit(
+      dcc_spec,
+      data = asset_returns, # Pass the cleaned data
+      solver = app_config$default$models$dcc_solver,
+      solver.control = app_config$default$models$dcc_solver_control
+    )
+  }, error = function(e) {
+    message("DCC fit failed with error: ", e$message)
+    # Return fallback empirical moments to allow scenario generation to continue
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  })
+
   return(dcc_fit_model)
 }

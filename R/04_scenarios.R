@@ -21,7 +21,7 @@ library(dplyr) # For lag, slice
 generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, asset_metadata, last_historical_levels, app_config) {
   
   # Ensure reproducibility
-  set.seed(123)
+  # set.seed(123) # Removed to avoid conflicts with targets' seed management and internal package seeding
   
   rsbvar_fitted_model <- fitted_generative_model$rsbvar_fitted_model
   rsbvar_spec <- fitted_generative_model$rsbvar_spec
@@ -48,6 +48,11 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     message("DEBUG: macro_var_names (from original colnames): ", paste(macro_var_names, collapse = ", "))
     message("DEBUG: Class of rsbvar_spec$get_data_matrices()$Y: ", paste(class(rsbvar_spec$get_data_matrices()$Y), collapse = ", "))
     n_macro_vars <- length(macro_var_names)
+    
+    # Set a validated seed for macro simulation; fallback gracefully if invalid
+    # set.seed(123) # Removed: targets handles global seeding
+
+
     
     # Use the forecast method for the bsvars object
     rsbvar_forecasts <- bsvars::forecast(
@@ -103,7 +108,15 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
           NA_real_
         }
 
+        message("DEBUG: Ticker: ", ticker, ", last_level for reconstruction: ", last_level)
+        message("DEBUG: Raw simulated series (sim_series) for ", ticker, ":")
+        print(summary(sim_series))
+        message("DEBUG: any(is.na(sim_series)) for ", ticker, ": ", any(is.na(sim_series)))
+        message("DEBUG: any(is.nan(sim_series)) for ", ticker, ": ", any(is.nan(sim_series)))
+        message("DEBUG: any(is.infinite(sim_series)) for ", ticker, ": ", any(is.infinite(sim_series)))
+        
         reconstructed_series <- reconstruct_macro_series(sim_series = sim_series, original_transform = transform_name, last_level = last_level)
+        message("DEBUG: Ticker: ", ticker, ", reconstructed_series sum(is.na): ", sum(is.na(reconstructed_series)))
         macro_scenarios_reconstructed[s, , j] <- reconstructed_series
       }
     }
@@ -120,54 +133,104 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
 
   # --- 2. Simulate Asset Returns from DCC-GARCH (This part is mandatory) ---
   message("Simulating asset scenarios from DCC-GARCH model...")
+  # Set a validated seed for asset simulation; fallback gracefully if invalid
 
   # Add debug prints and checks for dcc_garch_model components
   message("DEBUG: Class of dcc_garch_model: ", paste(class(dcc_garch_model), collapse = ", "))
   if (is.null(dcc_garch_model)) {
-    stop("DCC-GARCH model is NULL before extracting asset names.")
+    message("DCC-GARCH model is NULL. Will attempt fallback simulation if empirical moments provided.")
+    # If NULL, attempt to use fallback info if present
   }
   
-  message("DEBUG: Class of dcc_garch_model@model: ", paste(class(dcc_garch_model@model), collapse = ", "))
-  if (is.null(dcc_garch_model@model)) {
-    stop("dcc_garch_model@model is NULL before extracting asset names.")
+  # If we have a fitted DCC object, inspect its internals; if we have a fallback list, skip these checks
+  if (!is.null(dcc_garch_model) && inherits(dcc_garch_model, "DCCfit")) {
+    message("DEBUG: Class of dcc_garch_model@model: ", paste(class(dcc_garch_model@model), collapse = ", "))
+    if (is.null(dcc_garch_model@model)) {
+      stop("dcc_garch_model@model is NULL before extracting asset names.")
+    }
+
+    message("DEBUG: Class of dcc_garch_model@model$modeldata: ", paste(class(dcc_garch_model@model$modeldata), collapse = ", "))
+    if (is.null(dcc_garch_model@model$modeldata)) {
+      stop("dcc_garch_model@model$modeldata is NULL before extracting asset names.")
+    }
+
+    message("DEBUG: Class of dcc_garch_model@model$modeldata$data: ", paste(class(dcc_garch_model@model$modeldata$data), collapse = ", "))
+    if (is.null(dcc_garch_model@model$modeldata$data)) {
+      stop("dcc_garch_model@model$modeldata$data is NULL or malformed before extracting asset names.")
+    }
+    message("DEBUG: dim(dcc_garch_model@model$modeldata$data): ", paste(dim(dcc_garch_model@model$modeldata$data), collapse = ", "))
+  } else if (!is.null(dcc_garch_model) && is.list(dcc_garch_model) && !is.null(dcc_garch_model$fallback) && dcc_garch_model$fallback == TRUE) {
+    message("DEBUG: DCC model unavailable; using empirical fallback for asset simulation.")
+  } else if (is.null(dcc_garch_model)) {
+    stop("DCC-GARCH model is NULL before extracting asset names and no fallback provided.")
+  } else {
+    stop("Unsupported dcc_garch_model object type: ", paste(class(dcc_garch_model), collapse = ", "))
   }
 
-  message("DEBUG: Class of dcc_garch_model@model$modeldata: ", paste(class(dcc_garch_model@model$modeldata), collapse = ", "))
-  if (is.null(dcc_garch_model@model$modeldata)) {
-    stop("dcc_garch_model@model$modeldata is NULL before extracting asset names.")
+  # If dcc_garch_model is a fitted DCCfit, use rmgarch dccsim; otherwise, fall back to empirical moments
+  if (!is.null(dcc_garch_model) && inherits(dcc_garch_model, "DCCfit")) {
+    # Get number of assets and asset names from the fitted model's data
+    n_assets <- ncol(dcc_garch_model@model$modeldata$data)
+    asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
+
+    asset_sims_transformed <- array(NA, dim = c(n_sim, horizon, n_assets))
+    dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names) # Assign dimnames after creation
+
+    # Perform a single simulation call for all n_sim simulations
+    sim_all <- rmgarch::dccsim(
+      dcc_garch_model,
+      n.sim = horizon,
+      m.sim = n_sim, # Generate all n_sim simulations at once
+      startMethod = "unconditional"
+    )
+    print("DEBUG: After dccsim call ---------------------")
+    print(paste0("DEBUG: class(sim_all): ", paste(class(sim_all), collapse = ", ")))
+    print(paste0("DEBUG: is.null(sim_all): ", is.null(sim_all)))
+    print(paste0("DEBUG: is.null(sim_all@msim): ", is.null(sim_all@msim)))
+    if (!is.null(sim_all@msim)) {
+      print(paste0("DEBUG: class(sim_all@msim$simX): ", paste(class(sim_all@msim$simX), collapse = ", ")))
+      print(paste0("DEBUG: length(sim_all@msim$simX): ", length(sim_all@msim$simX)))
+      if (is.list(sim_all@msim$simX) && length(sim_all@msim$simX) > 0) {
+        print(paste0("DEBUG: class(sim_all@msim$simX[[1]]): ", paste(class(sim_all@msim$simX[[1]]), collapse = ", ")))
+        print(paste0("DEBUG: dim(sim_all@msim$simX[[1]]): ", paste(dim(sim_all@msim$simX[[1]]), collapse = "x")))
+      } else if (!is.null(sim_all@msim$simX)) { # This case handles if simX is not a list but a matrix directly
+        print(paste0("DEBUG: dim(sim_all@msim$simX): ", paste(dim(sim_all@msim$simX), collapse = "x")))
+      }
+    }
+    print("DEBUG: str(sim_all) ----------------------------")
+    str(sim_all)
+    print("DEBUG: End dccsim inspection --------------------")
+    message("DEBUG: class(sim_all): ", paste(class(sim_all), collapse = ", "))
+    if (is.null(sim_all)) stop("dccsim returned NULL")
+    if (is.null(sim_all@msim)) stop("sim_all@msim is NULL")
+    if (is.null(sim_all@msim$simX)) stop("sim_all@msim$simX is NULL")
+    message("DEBUG: After dccsim, NROW(sim_all@msim$simX) is ", NROW(sim_all@msim$simX), " and NCOL(sim_all@msim$simX) is ", NCOL(sim_all@msim$simX))
+
+    # Extract simulated series (returns)
+    asset_sims_transformed <- purrr::map_depth(sim_all@msim$simX, 1, ~ t(.x)) %>%
+      simplify2array() %>%
+      aperm(c(3, 1, 2))
+
+    # Ensure dimnames are correctly set
+    dimnames(asset_sims_transformed)[[3]] <- asset_var_names
+  } else if (!is.null(dcc_garch_model) && is.list(dcc_garch_model) && !is.null(dcc_garch_model$fallback) && dcc_garch_model$fallback == TRUE) {
+    # Use empirical mean and covariance fallback supplied by fit_dcc_t_garch_model
+    emp_mean <- dcc_garch_model$emp_mean
+    emp_cov <- dcc_garch_model$emp_cov
+    asset_var_names <- dcc_garch_model$asset_names
+    n_assets <- length(asset_var_names)
+
+    asset_sims_transformed <- array(NA, dim = c(n_sim, horizon, n_assets))
+    dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names)
+
+    for (s in 1:n_sim) {
+      draws <- MASS::mvrnorm(n = horizon, mu = emp_mean, Sigma = emp_cov)
+      # draws is horizon x n_assets
+      asset_sims_transformed[s, , ] <- draws
+    }
+  } else {
+    stop("DCC-GARCH model unavailable and no fallback provided. Cannot simulate asset scenarios.")
   }
-
-  message("DEBUG: Class of dcc_garch_model@model$modeldata$data: ", paste(class(dcc_garch_model@model$modeldata$data), collapse = ", "))
-  if (is.null(dcc_garch_model@model$modeldata$data)) {
-    stop("dcc_garch_model@model$modeldata$data is NULL or malformed before extracting asset names.")
-  }
-  message("DEBUG: dim(dcc_garch_model@model$modeldata$data): ", paste(dim(dcc_garch_model@model$modeldata$data), collapse = ", "))
-
-  # Get number of assets and asset names from the fitted model's data
-  # The actual data is in dcc_garch_model@model$modeldata$data
-  n_assets <- ncol(dcc_garch_model@model$modeldata$data)
-  asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
-  
-  asset_sims_transformed <- array(NA, dim = c(n_sim, horizon, n_assets))
-  dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names) # Assign dimnames after creation
-
-  # Perform a single simulation call for all n_sim simulations
-  sim_all <- rmgarch::dccsim(
-    dcc_garch_model,
-    n.sim = horizon,
-    m.sim = n_sim, # Generate all n_sim simulations at once
-    startMethod = "sample"
-  )
-
-  # Extract simulated series (returns)
-  # sim_all@msim$simX is a list of matrices, where each matrix is a simulation path
-  # Convert the list of matrices to a 3D array of dimensions [n_sim, horizon, n_assets]
-  asset_sims_transformed <- purrr::map_depth(sim_all@msim$simX, 1, ~ t(.x)) %>%
-    simplify2array() %>%
-    aperm(c(3, 1, 2))
-  
-  # Ensure dimnames are correctly set
-  dimnames(asset_sims_transformed)[[3]] <- asset_var_names
   
   # For asset returns, the simulated values from dccsim are already simple returns.
   # No inverse transformation is needed here; the array 'asset_sims_transformed'

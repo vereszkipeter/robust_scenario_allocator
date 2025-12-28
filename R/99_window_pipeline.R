@@ -2,26 +2,42 @@
 # This function executes the sequence of steps that were previously
 # expressed as many individual targets inside `define_window_targets()`.
 
-process_window <- function(window_id, from_date, to_date, val_date, oos_from_date, oos_to_date, app_config, asset_metadata) {
-  # 2. Data Ingestion
-  raw_data <- get_all_raw_data(
-    asset_metadata = asset_metadata,
-    cache_dir = app_config$default$cache_dir,
-    from = from_date,
-    to = to_date
-  )
-
+process_window <- function(window_id, from_date, to_date, val_date, oos_from_date, oos_to_date, app_config, asset_metadata, all_raw_data) {
+  # Subset all_raw_data for the current window (each xts object in the list)
+  current_window_raw_data <- lapply(all_raw_data, function(x) x[paste0(from_date, "::", to_date)])
+  
   # 3. Data Processing
-  monthly_returns <- apply_transformations(raw_data = raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
+  monthly_returns <- apply_transformations(raw_data_list = current_window_raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
   message("DEBUG: NROW(monthly_returns) after transformations: ", NROW(monthly_returns))
   split_data <- split_data_by_type(monthly_returns, asset_metadata)
   asset_returns <- split_data$asset_returns
   message("DEBUG: NROW(asset_returns) before DCC-GARCH: ", NROW(asset_returns))
   macro_data <- split_data$macro_data
+  message("DEBUG: Column names in monthly_returns: ", paste(colnames(monthly_returns), collapse = ", "))
+  message("DEBUG: Column names in macro_data before lagging: ", paste(colnames(macro_data), collapse = ", "))
 
-  # 1-month lag for macro data
   macro_original_colnames <- colnames(macro_data)
-  lagged_macro_data <- na.omit(xts::lag.xts(macro_data, k = 1))
+  if (is.null(macro_data) || NCOL(macro_data) == 0) {
+    lagged_macro_data <- NULL
+  } else {
+    macro_data_filled <- na.locf(na.locf(macro_data, na.rm = FALSE), fromLast = TRUE)
+    lagged_macro_data <- na.omit(lag.xts(macro_data_filled, k = 1))
+    message("DEBUG: Column names in lagged_macro_data: ", paste(colnames(lagged_macro_data), collapse = ", "))
+    message("DEBUG: Dimensions of lagged_macro_data: ", NROW(lagged_macro_data), " rows, ", NCOL(lagged_macro_data), " cols")
+  }
+
+  # Enforce NA policy for modeling: prepare asset_returns for DCC
+  min_dcc_obs <- app_config$default$models$min_dcc_obs
+  if (!is.null(asset_returns) && NROW(asset_returns) > 0) {
+    # Drop any rows with NA in asset returns for DCC estimation
+    asset_returns_model <- na.omit(asset_returns)
+    message("DEBUG: asset_returns_model rows after na.omit: ", NROW(asset_returns_model))
+    if (NROW(asset_returns_model) < min_dcc_obs) {
+      message("WARNING: Insufficient asset_returns observations (", NROW(asset_returns_model), ") for reliable DCC estimation. DCC fit may fallback.")
+    }
+  } else {
+    asset_returns_model <- asset_returns
+  }
 
   # 4. Model fitting
   fitted_rsbvar_output <- tryCatch(
@@ -33,8 +49,12 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   fitted_rsbvar_spec <- if (!is.null(fitted_rsbvar_output)) fitted_rsbvar_output$spec else NULL
 
   fitted_dcc_garch_model <- tryCatch(
-    fit_dcc_t_garch_model(asset_returns, app_config = app_config),
-    error = function(e) { message("fit_dcc_t_garch_model failed: ", e$message); return(NULL) }
+    fit_dcc_t_garch_model(asset_returns_model, app_config = app_config),
+    error = function(e) { 
+      message("fit_dcc_t_garch_model failed with a detailed error:")
+      print(e)
+      return(NULL) 
+    }
   )
 
   fitted_generative_model <- list(
@@ -45,23 +65,45 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   )
 
   # 5. Scenario generation
-  # Robust extraction of the last historical level for each series
-  # This ensures that `last_historical_data_levels` always contains the last
-  # finite observed value for each series, even if the very last row of `raw_data`
-  # has NA values for some series.
-  last_historical_data_levels_matrix <- matrix(NA_real_, nrow = 1, ncol = ncol(raw_data),
-                                               dimnames = list(NULL, colnames(raw_data)))
-  
-  for (col_idx in 1:ncol(raw_data)) {
-    series_core_data <- coredata(raw_data[, col_idx])
-    last_finite_val <- tail(series_core_data[is.finite(series_core_data)], 1)
-    if (length(last_finite_val) > 0) {
-      last_historical_data_levels_matrix[1, col_idx] <- last_finite_val
+  # Robust extraction of the last historical level for each series from the current_window_raw_data
+  last_historical_data_levels_list <- list()
+  for (ticker_name in names(current_window_raw_data)) { # Iterate over names
+    series <- current_window_raw_data[[ticker_name]] # Access list element
+    last_finite_val_raw <- tail(series[is.finite(series)], 1) # Get the last finite value
+        
+        if (NROW(last_finite_val_raw) > 0) {
+      # Standardize the index of last_finite_val to the window's to_date
+      standardized_xts <- xts(as.numeric(last_finite_val_raw), order.by = to_date)
+      colnames(standardized_xts) <- ticker_name
+      last_historical_data_levels_list[[ticker_name]] <- standardized_xts
+    } else {
+      # Fallback: if no finite value at the end, use the mean of finite values in the series for the window
+      finite_series_values <- as.numeric(series[is.finite(series)])
+      if (length(finite_series_values) > 0) {
+        fallback_value <- mean(finite_series_values, na.rm = TRUE)
+        # Create an xts object for the fallback value, indexed at the window's to_date
+        fallback_xts <- xts(fallback_value, order.by = to_date) # Use to_date as the index
+        colnames(fallback_xts) <- ticker_name
+        last_historical_data_levels_list[[ticker_name]] <- fallback_xts
+        warning(paste0("Macro ticker '", ticker_name, "' had no finite last historical level. Using mean (", round(fallback_value, 2), ") as fallback for last_level."))
+      } else {
+        # If the entire series is NA/Inf, still don't add it to last_historical_data_levels_list
+        # This will correctly lead to NA_real_ for last_level in generate_full_scenarios,
+        # which `reconstruct_macro_series` already handles by returning NA series.
+        warning(paste0("Macro ticker '", ticker_name, "' is entirely non-finite in the current window. Skipping last_level creation."))
+      }
     }
   }
-  # Create an xts object for consistency with how it's used downstream (e.g., in reconstruct_macro_series)
-  # Use the index of the last row of raw_data, as `last_historical_data_levels` is conceptually "at" that point in time.
-  last_historical_data_levels <- xts(last_historical_data_levels_matrix, order.by = index(tail(raw_data, 1)))
+  
+  if (length(last_historical_data_levels_list) > 0) {
+    # Merge these single-observation xts objects into one xts row for consistency
+    last_historical_data_levels <- do.call(merge, last_historical_data_levels_list)
+  } else {
+    # If no data is available to determine last levels, we can either stop or use a default/warning.
+    # For now, let's stop as it's critical for inverse transformations.
+    stop("Could not determine last historical data levels for any series from raw_data_list.")
+  }
+
   simulated_scenarios <- tryCatch(
     generate_full_scenarios(
       fitted_generative_model,

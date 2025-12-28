@@ -9,14 +9,16 @@ library(tibble)   # For tibble creation
 #'   `data$from`, `data$to`, `initial_window_months`, `roll_forward_months`,
 #'   and `validation_start_date`.
 #' @return A tibble with columns: `window_id`, `from_date`, `to_date`, `val_date`.
-generate_wf_windows <- function(app_config) {
+generate_wf_windows <- function(app_config, panel_data) {
   
-  overall_from_date <- as.Date(app_config$default$data$from)
-  overall_to_date <- as.Date(app_config$default$data$to)
+  overall_from_date <- start(panel_data)
+  overall_to_date <- end(panel_data)
+  
   initial_window_months <- app_config$default$initial_window_months
   roll_forward_months <- app_config$default$roll_forward_months
   validation_start_date <- as.Date(app_config$default$validation_start_date)
   min_dcc_obs <- app_config$default$models$min_dcc_obs # Read min_dcc_obs
+
 
   # Ensure validation_start_date is after the initial window can be formed
   message("DEBUG: generate_wf_windows - overall_from_date: ", overall_from_date, ", overall_to_date: ", overall_to_date)
@@ -28,21 +30,30 @@ generate_wf_windows <- function(app_config) {
   }
   
   windows <- tibble()
-  current_to_date <- validation_start_date
+  current_to_date <- lubridate::ceiling_date(validation_start_date, "month") - days(1)
   window_id_counter <- 1
   
   while (current_to_date <= overall_to_date) {
     message("DEBUG: Loop iteration ", window_id_counter, ", current_to_date: ", current_to_date)
-    training_window_end <- current_to_date
+    # Ensure training_window_end is end of month, based on current_to_date (which will also be month-end)
+    training_window_end <- current_to_date # current_to_date is already month-end
     training_window_start <- training_window_end %m-% months(initial_window_months)
     
-    if (training_window_start < overall_from_date) {
-        training_window_start <- overall_from_date
+    # Adjust training_window_start to the end of the month if it falls mid-month due to initial_window_months subtraction
+    training_window_start <- lubridate::ceiling_date(training_window_start, "month") - days(1)
+
+    # Ensure overall_from_date is also month-end aligned before comparison and assignment
+    # Ensure overall_from_date_aligned correctly represents the month-end of the *first* data month.
+    # E.g., if overall_from_date is "2000-01-01", overall_from_date_aligned should be "2000-01-31".
+    overall_from_date_aligned <- lubridate::floor_date(overall_from_date, "month") %m+% months(1) - days(1)
+    if (training_window_start < overall_from_date_aligned) {
+        training_window_start <- overall_from_date_aligned
     }
 
     oos_from_date <- training_window_end + days(1)
     oos_to_date_candidate <- training_window_end %m+% months(roll_forward_months)
-    oos_to_date <- min(oos_to_date_candidate, overall_to_date) 
+    oos_to_date_candidate <- lubridate::ceiling_date(oos_to_date_candidate, "month") - days(1) # Ensure month-end
+    oos_to_date <- min(oos_to_date_candidate, lubridate::ceiling_date(overall_to_date, "month") - days(1)) # Ensure overall_to_date is also month-end
 
     actual_training_months <- ((lubridate::year(training_window_end) - lubridate::year(training_window_start)) * 12) + 
                               lubridate::month(training_window_end) - lubridate::month(training_window_start) + 1 
@@ -50,8 +61,8 @@ generate_wf_windows <- function(app_config) {
     message("DEBUG:   training_window_start: ", training_window_start, ", training_window_end: ", training_window_end)
     message("DEBUG:   actual_training_months: ", actual_training_months, ", min_dcc_obs: ", min_dcc_obs)
     message("DEBUG:   oos_from_date: ", oos_from_date, ", oos_to_date: ", oos_to_date)
-    message("DEBUG:   Condition (oos_from_date <= oos_to_date): ", oos_from_date <= oos_to_date)
-    message("DEBUG:   Condition (actual_training_months >= min_dcc_obs): ", actual_training_months >= min_dcc_obs)
+    message("DEBUG:   Condition check: oos_from_date (", oos_from_date, ") <= oos_to_date (", oos_to_date, ") is ", oos_from_date <= oos_to_date)
+    message("DEBUG:   Condition check: actual_training_months (", actual_training_months, ") >= min_dcc_obs (", min_dcc_obs, ") is ", actual_training_months >= min_dcc_obs)
     
     if (oos_from_date <= oos_to_date && actual_training_months >= min_dcc_obs) { 
       message("DEBUG:     Adding window ", window_id_counter)
@@ -67,11 +78,12 @@ generate_wf_windows <- function(app_config) {
       message("DEBUG:     Skipping window ", window_id_counter, " due to failed condition.")
     }
     
-    current_to_date <- current_to_date %m+% months(roll_forward_months)
+    # Advance current_to_date, ensuring it remains a month-end date
+    current_to_date <- lubridate::ceiling_date(current_to_date %m+% months(roll_forward_months), "month") - days(1)
     window_id_counter <- window_id_counter + 1
   }
   
-  message("Generated ", nrow(windows), " walk-forward validation windows. (Minimum ", min_dcc_obs, " months training data required).")
+  message("DEBUG: Generated ", nrow(windows), " walk-forward validation windows. (Minimum ", min_dcc_obs, " months training data required).")
   return(windows)
 }
 
