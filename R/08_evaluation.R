@@ -204,12 +204,44 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   metrics$psr <- psr_dsr_results$psr
   metrics$dsr <- psr_dsr_results$dsr
 
-  return(list(
-    oos_returns = oos_portfolio_returns,
-    metrics = metrics
-  ))
-}
-
+      return(list(
+        oos_returns = oos_portfolio_returns,
+        metrics = metrics
+      ))
+  }
+  
+  #' @title Compare Simulated and Historical Distributions
+  #' @description Calculates mean, standard deviation, and performs a Kolmogorov-Smirnov test
+  #'   between simulated terminal values and historical data for a given variable.
+  #' @param simulated_data A numeric vector of simulated terminal values.
+  #' @param historical_data A numeric vector of historical values.
+  #' @param var_name The name of the variable being compared.
+  #' @return A character string summarizing the comparison.
+  compare_distributions <- function(simulated_data, historical_data, var_name) {
+    sim_mean <- mean(simulated_data, na.rm = TRUE)
+    sim_sd <- sd(simulated_data, na.rm = TRUE)
+    hist_mean <- mean(historical_data, na.rm = TRUE)
+    hist_sd <- sd(historical_data, na.rm = TRUE)
+    
+    # Ensure historical_data has sufficient non-NA values for ks.test
+    # ks.test requires at least 2 non-NA values
+    if (length(na.omit(historical_data)) < 2 || length(na.omit(simulated_data)) < 2) {
+        ks_test_result <- "KS test skipped (insufficient data)"
+    } else {
+        ks_test <- ks.test(simulated_data, historical_data)
+        ks_test_result <- paste0("KS Test p-value: ", round(ks_test$p.value, 4))
+    }
+  
+    return(
+      paste0(
+        "\n--- ", var_name, " Comparison ---\n",
+        "Simulated Mean: ", round(sim_mean, 5), ", SD: ", round(sim_sd, 5), "\n",
+        "Historical Mean: ", round(hist_mean, 5), ", SD: ", round(hist_sd, 5), "\n",
+        ks_test_result, "\n"
+      )
+    )
+  }
+  
 #' @title Perform Sanity Check on Simulated Scenarios
 #' @description Generates diagnostic plots to visually inspect the quality of the
 #'   simulated scenarios against historical data.
@@ -224,6 +256,8 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
     dir.create(output_dir, recursive = TRUE)
   }
   
+  sanity_check_messages <- c("Scenario Sanity Check Report:\n")
+
   asset_scenarios <- simulated_scenarios$asset_scenarios
   macro_scenarios <- simulated_scenarios$macro_scenarios # Extract macro scenarios
   
@@ -233,6 +267,7 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
   # --- ASSET SCENARIOS SANITY CHECK ---
   if (is.null(asset_scenarios)) {
     warning("Asset scenarios are NULL. Skipping asset scenarios sanity check.")
+    sanity_check_messages <- c(sanity_check_messages, "Asset scenarios are NULL. Skipping asset scenarios sanity check.\n")
   } else {
     asset_names <- dimnames(asset_scenarios)[[3]]
     
@@ -274,11 +309,12 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
     # Get terminal values (end of horizon)
     terminal_returns <- as.data.frame(asset_scenarios[, horizon, ])
     
-    # Plot histograms
+    # Plot histograms and perform statistical comparison
     for (asset_name in asset_names) {
       # Ensure historical_returns has the correct column for the current asset
       if (!(asset_name %in% colnames(historical_returns))) {
-        warning(paste("Historical returns for asset", asset_name, "not found. Skipping histogram for this asset."))
+        warning(paste("Historical returns for asset", asset_name, "not found. Skipping histogram and statistical comparison for this asset."))
+        sanity_check_messages <- c(sanity_check_messages, paste("Historical returns for asset", asset_name, "not found. Skipping statistical comparison.\n"))
         next
       }
       p <- ggplot() +
@@ -293,12 +329,18 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
         theme_minimal()
       
       ggsave(file.path(output_dir, paste0("histogram_asset_", asset_name, ".png")), plot = p, width = 10, height = 6)
+
+      # Add statistical comparison for asset
+      sim_data_asset <- terminal_returns[[asset_name]]
+      hist_data_asset <- as.numeric(historical_returns[, asset_name]) # Convert xts column to numeric vector
+      sanity_check_messages <- c(sanity_check_messages, compare_distributions(simulated_data = sim_data_asset, historical_data = hist_data_asset, var_name = paste0("Asset: ", asset_name)))
     }
   }
   
   # --- MACRO SCENARIOS SANITY CHECK ---
   if (is.null(macro_scenarios)) {
     warning("Macro scenarios are NULL. Skipping macro scenarios sanity check.")
+    sanity_check_messages <- c(sanity_check_messages, "Macro scenarios are NULL. Skipping macro scenarios sanity check.\n")
   } else {
     macro_names <- dimnames(macro_scenarios)[[3]]
     
@@ -338,7 +380,8 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
     
     for (macro_name in macro_names) {
       if (!(macro_name %in% colnames(historical_macro_data))) {
-        warning(paste("Historical data for macro variable", macro_name, "not found. Skipping histogram for this variable."))
+        warning(paste("Historical data for macro variable", macro_name, "not found. Skipping histogram and statistical comparison for this variable."))
+        sanity_check_messages <- c(sanity_check_messages, paste("Historical data for macro variable", macro_name, "not found. Skipping statistical comparison.\n"))
         next
       }
       p <- ggplot() +
@@ -353,11 +396,17 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
         theme_minimal()
       
       ggsave(file.path(output_dir, paste0("histogram_macro_", macro_name, ".png")), plot = p, width = 10, height = 6)
+
+      # Add statistical comparison for macro variable
+      sim_data_macro <- terminal_macro_values[[macro_name]]
+      hist_data_macro <- as.numeric(historical_macro_data[, macro_name]) # Convert xts column to numeric vector
+      sanity_check_messages <- c(sanity_check_messages, compare_distributions(simulated_data = sim_data_macro, historical_data = hist_data_macro, var_name = paste0("Macro: ", macro_name)))
     }
   }
   
   # Create a dummy file to satisfy targets
   output_file <- file.path(output_dir, "scenario_sanity_check_complete.txt")
-  writeLines(c("Scenario sanity check completed.", paste("Plots saved to:", output_dir)), output_file)
+  writeLines(sanity_check_messages, output_file) # Write all collected messages
+  message("Scenario sanity check report generated:", output_file)
   return(output_file)
 }

@@ -82,7 +82,7 @@ list(
     purrr::pmap(
       wf_windows,
       function(window_id, from_date, to_date, val_date, oos_from_date, oos_to_date) {
-        process_window(
+        safely_process_window(
           window_id = window_id,
           from_date = from_date,
           to_date = to_date,

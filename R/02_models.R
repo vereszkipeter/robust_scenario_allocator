@@ -106,6 +106,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
 #' @param asset_returns An xts object containing the asset returns time series.
 #' @return A fitted `DCCfit` object.
 fit_dcc_t_garch_model <- function(asset_returns, app_config) {
+  message("DEBUG: NROW(asset_returns) inside fit_dcc_t_garch_model: ", NROW(asset_returns))
   # Define univariate GARCH specification for each asset
   # Based on GEMINI.md: AR(1)-GJR-GARCH(1,1) with Skewed-t distribution
   # Assuming AR(1) in mean, check if app_config provides this detail

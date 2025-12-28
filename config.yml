@@ -8,7 +8,7 @@ default:
       - "GLD"   # Gold ETF
       - "QQQ"   # Nasdaq 100 ETF
       - "VIXCLS" # CBOE Volatility Index
-    from: "2010-01-01"
+    from: "2000-01-01"
     to: "2023-12-31" # Using a fixed date for stability
   cache_dir: "data/cache" # Directory for caching downloaded raw data
 
@@ -17,9 +17,9 @@ default:
   horizon_months: 60
 
   # Walk-forward Validation Parameters
-  initial_window_months: 60 # Initial training window length in months (e.g., 5 years)
+  initial_window_months: 120 # Initial training window length in months (e.g., 5 years)
   roll_forward_months: 12   # How many months to roll forward for each rebalancing step
-  validation_start_date: "2015-01-01" # Date from which validation windows start to roll
+  validation_start_date: "2020-01-01" # Date from which validation windows start to roll
 
   # Model Parameters
   models:

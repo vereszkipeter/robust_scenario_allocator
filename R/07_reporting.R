@@ -190,7 +190,36 @@ generate_global_validation_report <- function(all_window_results, app_config, ou
   all_ew_benchmark_oos_returns_list <- list() # New: for benchmark OOS returns
 
   # Loop through each window's results
-  for (res in all_window_results) {
+  successful_results <- list()
+  failed_windows_info <- list()
+
+  for (res_wrapped in all_window_results) {
+    if (is.null(res_wrapped$error)) {
+      successful_results[[length(successful_results) + 1]] <- res_wrapped$result
+    } else {
+      # Assuming window_id is always present in the result, even if partial
+      window_id_failed <- if (!is.null(res_wrapped$result$window_id)) res_wrapped$result$window_id else "UNKNOWN"
+      failed_windows_info[[length(failed_windows_info) + 1]] <- list(
+        window_id = window_id_failed,
+        error = res_wrapped$error
+      )
+      message("Skipping window due to error: Window ID ", window_id_failed, ", Error: ", res_wrapped$error)
+    }
+  }
+
+  if (length(failed_windows_info) > 0) {
+    warning(length(failed_windows_info), " walk-forward window(s) failed. Check logs for details.")
+    # Optionally, save failed_windows_info to a separate log file
+    # for example:
+    # yaml::write_yaml(failed_windows_info, file = file.path(output_report_dir, "failed_windows_log.yml"))
+  }
+  
+  if (length(successful_results) == 0) {
+    stop("No successful walk-forward windows were processed. Cannot generate global report.")
+  }
+
+  # Loop through each *successful* window's results
+  for (res in successful_results) {
     # Calculate In-Sample (Simulated Future) Metrics
     in_sample_metrics <- calculate_window_metrics(
       base_strategy_pnl_on_scenarios = res$base_strategy_pnl_on_scenarios,

@@ -13,8 +13,10 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
 
   # 3. Data Processing
   monthly_returns <- apply_transformations(raw_data = raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
+  message("DEBUG: NROW(monthly_returns) after transformations: ", NROW(monthly_returns))
   split_data <- split_data_by_type(monthly_returns, asset_metadata)
   asset_returns <- split_data$asset_returns
+  message("DEBUG: NROW(asset_returns) before DCC-GARCH: ", NROW(asset_returns))
   macro_data <- split_data$macro_data
 
   # 1-month lag for macro data
@@ -43,7 +45,23 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   )
 
   # 5. Scenario generation
-  last_historical_data_levels <- tail(raw_data, 1)
+  # Robust extraction of the last historical level for each series
+  # This ensures that `last_historical_data_levels` always contains the last
+  # finite observed value for each series, even if the very last row of `raw_data`
+  # has NA values for some series.
+  last_historical_data_levels_matrix <- matrix(NA_real_, nrow = 1, ncol = ncol(raw_data),
+                                               dimnames = list(NULL, colnames(raw_data)))
+  
+  for (col_idx in 1:ncol(raw_data)) {
+    series_core_data <- coredata(raw_data[, col_idx])
+    last_finite_val <- tail(series_core_data[is.finite(series_core_data)], 1)
+    if (length(last_finite_val) > 0) {
+      last_historical_data_levels_matrix[1, col_idx] <- last_finite_val
+    }
+  }
+  # Create an xts object for consistency with how it's used downstream (e.g., in reconstruct_macro_series)
+  # Use the index of the last row of raw_data, as `last_historical_data_levels` is conceptually "at" that point in time.
+  last_historical_data_levels <- xts(last_historical_data_levels_matrix, order.by = index(tail(raw_data, 1)))
   simulated_scenarios <- tryCatch(
     generate_full_scenarios(
       fitted_generative_model,

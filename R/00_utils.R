@@ -11,7 +11,9 @@ library(PerformanceAnalytics) # For PSR and DSR calculations
 #' the PerformanceAnalytics package for robustness.
 #' @param x An xts object, typically of adjusted prices.
 #' @return An xts object of log returns.
-log_return <- function(x) {
+calculate_log_return <- function(x) {
+  # NOTE: This function is not currently used in asset_metadata for transformations.
+  # Instead, `base::log` is used for the VIXCLS series.
   # Wrapper around PerformanceAnalytics for consistent, robust calculation
   PerformanceAnalytics::Return.calculate(x, method = "log")
 }
@@ -190,7 +192,7 @@ ensure_app_config_defaults <- function(app_config) {
   if (is.null(app_config$default$cache_dir)) app_config$default$cache_dir <- "data/cache"
   if (is.null(app_config$default$n_simulations)) app_config$default$n_simulations <- 100
   if (is.null(app_config$default$horizon_months)) app_config$default$horizon_months <- 60
-  if (is.null(app_config$default$initial_window_months)) app_config$default$initial_window_months <- 60
+  if (is.null(app_config$default$initial_window_months)) app_config$default$initial_window_months <- 120
   if (is.null(app_config$default$roll_forward_months)) app_config$default$roll_forward_months <- 12
   if (is.null(app_config$default$validation_start_date)) app_config$default$validation_start_date <- "2015-01-01"
 
@@ -222,6 +224,7 @@ ensure_app_config_defaults <- function(app_config) {
   if (is.null(mods$hrp_linkage_method)) mods$hrp_linkage_method <- "single" # Default as per HierPortfolios example
   if (is.null(mods$dcc_solver)) mods$dcc_solver <- "solnp" # Added this default
   if (is.null(mods$dcc_solver_control)) mods$dcc_solver_control <- list(trace = 0) # Added this default
+  if (is.null(mods$min_dcc_obs)) mods$min_dcc_obs <- 100 # Minimum observations for DCC-GARCH
 
   app_config$default$models <- mods
   

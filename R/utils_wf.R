@@ -16,8 +16,13 @@ generate_wf_windows <- function(app_config) {
   initial_window_months <- app_config$default$initial_window_months
   roll_forward_months <- app_config$default$roll_forward_months
   validation_start_date <- as.Date(app_config$default$validation_start_date)
-  
+  min_dcc_obs <- app_config$default$models$min_dcc_obs # Read min_dcc_obs
+
   # Ensure validation_start_date is after the initial window can be formed
+  message("DEBUG: generate_wf_windows - overall_from_date: ", overall_from_date, ", overall_to_date: ", overall_to_date)
+  message("DEBUG: generate_wf_windows - initial_window_months: ", initial_window_months, ", roll_forward_months: ", roll_forward_months)
+  message("DEBUG: generate_wf_windows - validation_start_date: ", validation_start_date, ", min_dcc_obs: ", min_dcc_obs)
+  
   if (validation_start_date < (overall_from_date %m+% months(initial_window_months))) {
     stop("validation_start_date is too early. It must allow for the initial window.")
   }
@@ -27,55 +32,46 @@ generate_wf_windows <- function(app_config) {
   window_id_counter <- 1
   
   while (current_to_date <= overall_to_date) {
-    # The training window ends at current_to_date.
-    # The training window starts `initial_window_months` before current_to_date.
-    # The strategy decision is made at current_to_date for the period *after* it.
-    
-    # Calculate the training window end date. This is the rebalancing date.
-    # This date will also be used to filter the *historical data* for model fitting.
+    message("DEBUG: Loop iteration ", window_id_counter, ", current_to_date: ", current_to_date)
     training_window_end <- current_to_date
-    
-    # Calculate the training window start date
     training_window_start <- training_window_end %m-% months(initial_window_months)
     
-    # Check if the training window starts before the overall data start.
-    # If so, adjust training_window_start to overall_from_date.
-    # This means the initial windows might be shorter than initial_window_months,
-    # until it reaches full length. Or, we can enforce minimum length.
-    # For now, let's enforce minimum length - window must be at least initial_window_months long.
     if (training_window_start < overall_from_date) {
-        # This implies we can't form a full initial window, so we stop if we enforce strict length
-        # Or, we can adjust the start date. Let's adjust to be robust.
         training_window_start <- overall_from_date
     }
 
-    # Define the out-of-sample period for this window's weights
     oos_from_date <- training_window_end + days(1)
     oos_to_date_candidate <- training_window_end %m+% months(roll_forward_months)
-    oos_to_date <- min(oos_to_date_candidate, overall_to_date) # Truncate if it goes beyond overall_to_date
+    oos_to_date <- min(oos_to_date_candidate, overall_to_date) 
 
-    # Only include windows that have a valid out-of-sample period
-    if (oos_from_date <= oos_to_date) {
-      # Store the window
+    actual_training_months <- ((lubridate::year(training_window_end) - lubridate::year(training_window_start)) * 12) + 
+                              lubridate::month(training_window_end) - lubridate::month(training_window_start) + 1 
+    
+    message("DEBUG:   training_window_start: ", training_window_start, ", training_window_end: ", training_window_end)
+    message("DEBUG:   actual_training_months: ", actual_training_months, ", min_dcc_obs: ", min_dcc_obs)
+    message("DEBUG:   oos_from_date: ", oos_from_date, ", oos_to_date: ", oos_to_date)
+    message("DEBUG:   Condition (oos_from_date <= oos_to_date): ", oos_from_date <= oos_to_date)
+    message("DEBUG:   Condition (actual_training_months >= min_dcc_obs): ", actual_training_months >= min_dcc_obs)
+    
+    if (oos_from_date <= oos_to_date && actual_training_months >= min_dcc_obs) { 
+      message("DEBUG:     Adding window ", window_id_counter)
       windows <- bind_rows(windows, tibble(
         window_id = window_id_counter,
         from_date = training_window_start,
         to_date = training_window_end,
-        val_date = training_window_end, # Decision date, also end of training period
+        val_date = training_window_end, 
         oos_from_date = oos_from_date,
         oos_to_date = oos_to_date
       ))
+    } else {
+      message("DEBUG:     Skipping window ", window_id_counter, " due to failed condition.")
     }
     
-    # Roll forward the window
     current_to_date <- current_to_date %m+% months(roll_forward_months)
     window_id_counter <- window_id_counter + 1
   }
   
-  # Filter out windows where the training data range is too short if needed.
-  # For now, assume a robust generation where first window might be shorter.
-  
-  message("Generated ", nrow(windows), " walk-forward validation windows.")
+  message("Generated ", nrow(windows), " walk-forward validation windows. (Minimum ", min_dcc_obs, " months training data required).")
   return(windows)
 }
 
@@ -154,3 +150,28 @@ plot_returns_pacf <- function(returns_df, output_plots_dir) {
   ggsave(file.path(output_plots_dir, "returns_pacf_plots.png"), plot = combined_pacf_plots, width = 12, height = 8)
 }
 
+#' @title Safely Process a Single Walk-Forward Window
+#' @description Wraps the `process_window` function in a `tryCatch` block
+#' to ensure that failures in one window do not halt the entire pipeline.
+#' @param ... Arguments passed directly to `process_window`.
+#' @return A list containing `result` (output of `process_window` on success, `NULL` on failure)
+#'   and `error` (error message on failure, `NULL` on success).
+safely_process_window <- function(...) {
+  window_args <- list(...)
+  window_id <- window_args$window_id
+  
+  message("Processing window_id: ", window_id)
+  
+  result <- tryCatch({
+    do.call(process_window, window_args)
+  }, error = function(e) {
+    message("Error processing window_id ", window_id, ": ", e$message)
+    list(result = NULL, error = e$message)
+  })
+  
+  if (!is.null(result$error)) {
+    return(result) # Already contains error information
+  } else {
+    return(list(result = result, error = NULL))
+  }
+}
