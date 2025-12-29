@@ -160,7 +160,7 @@ get_all_raw_data <- function(asset_metadata, cache_dir, from, to) {
 #' @param asset_metadata A tibble containing asset information, including ticker and transformation functions.
 #' @param window_to_date The 'to' date of the current window, used to check for incomplete last months.
 #' @return An xts object with all transformed and standardized monthly data.
-apply_transformations <- function(raw_data_list, asset_metadata, window_to_date, monthly_label = "end") {
+apply_transformations <- function(raw_data_list, asset_metadata, window_to_date, monthly_label = "end", app_config) {
 
   # Convert each series in the list to monthly levels
   list_of_monthly_series <- lapply(names(raw_data_list), function(ticker_name) {

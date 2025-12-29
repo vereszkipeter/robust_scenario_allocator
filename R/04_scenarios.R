@@ -23,7 +23,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   # Ensure reproducibility
   # set.seed(123) # Removed to avoid conflicts with targets' seed management and internal package seeding
   if (is.null(seed)) {
-    seed <- get_valid_seed()
+    seed <- get_valid_seed(app_config)
   }
   set.seed(seed)
   
@@ -33,10 +33,10 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   dcc_garch_model <- fitted_generative_model$dcc_garch_model
 # browser()
   # --- DEBUGGING START ---
-  message("DEBUG: class(rsbvar_fitted_model): ", paste(class(rsbvar_fitted_model), collapse = ", "))
-  message("DEBUG: class(rsbvar_spec): ", paste(class(rsbvar_spec), collapse = ", "))
-  message("DEBUG: macro_original_colnames: ", paste(macro_original_colnames, collapse = ", "))
-  message("DEBUG: class(dcc_garch_model): ", paste(class(dcc_garch_model), collapse = ", "))
+  log_message(paste0("class(rsbvar_fitted_model): ", paste(class(rsbvar_fitted_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message(paste0("class(rsbvar_spec): ", paste(class(rsbvar_spec), collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message(paste0("macro_original_colnames: ", paste(macro_original_colnames, collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message(paste0("class(dcc_garch_model): ", paste(class(dcc_garch_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
   # --- DEBUGGING END ---
 
   # Basic input validation
@@ -47,10 +47,10 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   macro_scenarios_array <- NULL # Initialize macro scenarios as NULL
   macro_var_names <- NULL
   if (!is.null(rsbvar_fitted_model) && inherits(rsbvar_fitted_model, "PosteriorBSVARMSH")) { # Check for specific class
-    message("DEBUG: Simulating macro scenarios from RS-BVAR model...")
+    log_message("Simulating macro scenarios from RS-BVAR model...", level = "DEBUG", app_config = app_config)
     macro_var_names <- macro_original_colnames # Use the original column names
-    message("DEBUG: macro_var_names (from original colnames): ", paste(macro_var_names, collapse = ", "))
-    message("DEBUG: Class of rsbvar_spec$get_data_matrices()$Y: ", paste(class(rsbvar_spec$get_data_matrices()$Y), collapse = ", "))
+    log_message(paste0("macro_var_names (from original colnames): ", paste(macro_var_names, collapse = ", ")), level = "DEBUG", app_config = app_config)
+    log_message(paste0("Class of rsbvar_spec$get_data_matrices()$Y: ", paste(class(rsbvar_spec$get_data_matrices()$Y), collapse = ", ")), level = "DEBUG", app_config = app_config)
     n_macro_vars <- length(macro_var_names)
     
     # Set a validated seed for macro simulation; fallback gracefully if invalid
@@ -107,7 +107,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     if (!exists("goto_skip_macro") || !isTRUE(goto_skip_macro)) {
       for (j in 1:n_macro_vars) {
         ticker <- macro_var_names[j]
-        message("DEBUG: Processing macro ticker for inverse transform: ", ticker)
+        log_message(paste0("Processing macro ticker for inverse transform: ", ticker), level = "DEBUG", app_config = app_config)
 
         filter_result <- asset_metadata %>% dplyr::filter(ticker == !!ticker)
         if (NROW(filter_result) == 0) {
@@ -115,7 +115,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
         }
 
         transform_name <- filter_result %>% dplyr::pull(transform_name) %>% dplyr::first()
-        message("DEBUG: transform_name for ", ticker, ": ", transform_name)
+        log_message(paste0("transform_name for ", ticker, ": ", transform_name), level = "DEBUG", app_config = app_config)
 
         if (is.null(transform_name) || length(transform_name) == 0) {
           stop(paste0("transform_name for macro ticker '", ticker, "' is NULL or empty."))
@@ -129,25 +129,25 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
             NA_real_
           }
 
-          message("DEBUG: Ticker: ", ticker, ", last_level for reconstruction: ", last_level)
-          message("DEBUG: Raw simulated series (sim_series) for ", ticker, ":")
+          log_message(paste0("Ticker: ", ticker, ", last_level for reconstruction: ", last_level), level = "DEBUG", app_config = app_config)
+          log_message(paste0("Raw simulated series (sim_series) for ", ticker, ":"), level = "DEBUG", app_config = app_config)
           print(summary(sim_series))
-          message("DEBUG: any(is.na(sim_series)) for ", ticker, ": ", any(is.na(sim_series)))
-          message("DEBUG: any(is.nan(sim_series)) for ", ticker, ": ", any(is.nan(sim_series)))
-          message("DEBUG: any(is.infinite(sim_series)) for ", ticker, ": ", any(is.infinite(sim_series)))
+          log_message(paste0("any(is.na(sim_series)) for ", ticker, ": ", any(is.na(sim_series))), level = "DEBUG", app_config = app_config)
+          log_message(paste0("any(is.nan(sim_series)) for ", ticker, ": ", any(is.nan(sim_series))), level = "DEBUG", app_config = app_config)
+          log_message(paste0("any(is.infinite(sim_series)) for ", ticker, ": ", any(is.infinite(sim_series))), level = "DEBUG", app_config = app_config)
 
           reconstructed_series <- reconstruct_macro_series(sim_series = sim_series, original_transform = transform_name, last_level = last_level)
-          message("DEBUG: Ticker: ", ticker, ", reconstructed_series sum(is.na): ", sum(is.na(reconstructed_series)))
+          log_message(paste0("Ticker: ", ticker, ", reconstructed_series sum(is.na): ", sum(is.na(reconstructed_series))), level = "DEBUG", app_config = app_config)
           macro_scenarios_reconstructed[s, , j] <- reconstructed_series
         }
       }
       macro_scenarios_array <- macro_scenarios_reconstructed
     } else {
-      message("Macro scenarios skipped due to RS-BVAR forecast diagnostic failure.")
+      log_message("Macro scenarios skipped due to RS-BVAR forecast diagnostic failure.", level = "INFO", app_config = app_config)
     }
 
   } else {
-    message("RS-BVAR model not provided or not of expected type. Skipping macro scenario simulation.")
+    log_message("RS-BVAR model not provided or not of expected type. Skipping macro scenario simulation.", level = "INFO", app_config = app_config)
     # macro_scenarios_array remains NULL
   } # Closing brace for the else block
 
@@ -156,35 +156,35 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
 
 
   # --- 2. Simulate Asset Returns from DCC-GARCH (This part is mandatory) ---
-  message("Simulating asset scenarios from DCC-GARCH model...")
+  log_message("Simulating asset scenarios from DCC-GARCH model...", level = "INFO", app_config = app_config)
   # Set a validated seed for asset simulation; fallback gracefully if invalid
 
   # Add debug prints and checks for dcc_garch_model components
-  message("DEBUG: Class of dcc_garch_model: ", paste(class(dcc_garch_model), collapse = ", "))
+  log_message(paste0("Class of dcc_garch_model: ", paste(class(dcc_garch_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
   if (is.null(dcc_garch_model)) {
-    message("DCC-GARCH model is NULL. Will attempt fallback simulation if empirical moments provided.")
+    log_message("DCC-GARCH model is NULL. Will attempt fallback simulation if empirical moments provided.", level = "INFO", app_config = app_config)
     # If NULL, attempt to use fallback info if present
   }
   
   # If we have a fitted DCC object, inspect its internals; if we have a fallback list, skip these checks
   if (!is.null(dcc_garch_model) && inherits(dcc_garch_model, "DCCfit")) {
-    message("DEBUG: Class of dcc_garch_model@model: ", paste(class(dcc_garch_model@model), collapse = ", "))
+    log_message(paste0("Class of dcc_garch_model@model: ", paste(class(dcc_garch_model@model), collapse = ", ")), level = "DEBUG", app_config = app_config)
     if (is.null(dcc_garch_model@model)) {
       stop("dcc_garch_model@model is NULL before extracting asset names.")
     }
 
-    message("DEBUG: Class of dcc_garch_model@model$modeldata: ", paste(class(dcc_garch_model@model$modeldata), collapse = ", "))
+    log_message(paste0("Class of dcc_garch_model@model$modeldata: ", paste(class(dcc_garch_model@model$modeldata), collapse = ", ")), level = "DEBUG", app_config = app_config)
     if (is.null(dcc_garch_model@model$modeldata)) {
       stop("dcc_garch_model@model$modeldata is NULL before extracting asset names.")
     }
 
-    message("DEBUG: Class of dcc_garch_model@model$modeldata$data: ", paste(class(dcc_garch_model@model$modeldata$data), collapse = ", "))
+    log_message(paste0("Class of dcc_garch_model@model$modeldata$data: ", paste(class(dcc_garch_model@model$modeldata$data), collapse = ", ")), level = "DEBUG", app_config = app_config)
     if (is.null(dcc_garch_model@model$modeldata$data)) {
       stop("dcc_garch_model@model$modeldata$data is NULL or malformed before extracting asset names.")
     }
-    message("DEBUG: dim(dcc_garch_model@model$modeldata$data): ", paste(dim(dcc_garch_model@model$modeldata$data), collapse = ", "))
+    log_message(paste0("dim(dcc_garch_model@model$modeldata$data): ", paste(dim(dcc_garch_model@model$modeldata$data), collapse = ", ")), level = "DEBUG", app_config = app_config)
   } else if (!is.null(dcc_garch_model) && is.list(dcc_garch_model) && !is.null(dcc_garch_model$fallback) && dcc_garch_model$fallback == TRUE) {
-    message("DEBUG: DCC model unavailable; using empirical fallback for asset simulation.")
+    log_message("DCC model unavailable; using empirical fallback for asset simulation.", level = "DEBUG", app_config = app_config)
   } else if (is.null(dcc_garch_model)) {
     stop("DCC-GARCH model is NULL before extracting asset names and no fallback provided.")
   } else {
@@ -215,11 +215,11 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     print("DEBUG: str(sim_all) ----------------------------")
     str(sim_all)
     print("DEBUG: End dccsim inspection --------------------")
-    message("DEBUG: class(sim_all): ", paste(class(sim_all), collapse = ", "))
+    log_message(paste0("class(sim_all): ", paste(class(sim_all), collapse = ", ")), level = "DEBUG", app_config = app_config)
     if (is.null(sim_all)) stop("dccsim returned NULL")
     if (is.null(sim_all@msim)) stop("sim_all@msim is NULL")
     if (is.null(sim_all@msim$simX)) stop("sim_all@msim$simX is NULL")
-    message("DEBUG: After dccsim, NROW(sim_all@msim$simX) is ", NROW(sim_all@msim$simX), " and NCOL(sim_all@msim$simX) is ", NCOL(sim_all@msim$simX))
+    log_message(paste0("After dccsim, NROW(sim_all@msim$simX) is ", NROW(sim_all@msim$simX), " and NCOL(sim_all@msim$simX) is ", NCOL(sim_all@msim$simX)), level = "DEBUG", app_config = app_config)
 
     # Extract simulated series (returns)
     asset_sims_transformed <- purrr::map_depth(sim_all@msim$simX, 1, ~ t(.x)) %>%
@@ -267,10 +267,10 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   # }
   # asset_scenarios_array <- asset_scenarios_reconstructed
   
-  message("DEBUG: asset_scenarios_array class: ", class(asset_scenarios_array), ", dim: ", paste(dim(asset_scenarios_array), collapse = ", "))
-  message("DEBUG: macro_scenarios_array class: ", class(macro_scenarios_array), ", dim: ", paste(dim(macro_scenarios_array), collapse = ", "))
+  log_message(paste0("asset_scenarios_array class: ", class(asset_scenarios_array), ", dim: ", paste(dim(asset_scenarios_array), collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message(paste0("macro_scenarios_array class: ", class(macro_scenarios_array), ", dim: ", paste(dim(macro_scenarios_array), collapse = ", ")), level = "DEBUG", app_config = app_config)
   
-  message("Full scenarios generated successfully.")
+  log_message("Full scenarios generated successfully.", level = "INFO", app_config = app_config)
   
   return(list(macro_scenarios = macro_scenarios_array, asset_scenarios = asset_scenarios_array))
 }
@@ -286,7 +286,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
 #' @return A 3D array (n_sim, horizon, 1) containing only the short rate scenarios.
 extract_short_rate_from_rsbvar_scenarios <- function(macro_scenarios, app_config) {
   if (is.null(macro_scenarios)) {
-    message("macro_scenarios is NULL. Returning NULL short rate scenarios.")
+    log_message("macro_scenarios is NULL. Returning NULL short rate scenarios.", level = "INFO", app_config = app_config)
     return(NULL) # Return NULL if macro_scenarios is NULL
   }
 

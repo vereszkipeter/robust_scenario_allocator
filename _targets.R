@@ -30,7 +30,8 @@ tar_option_set(
     "Hmisc",
     "corpcor",
     "ROI.plugin.glpk",
-    "ROI.plugin.quadprog"
+    "ROI.plugin.quadprog",
+    "coda"
   ),
   seed = 123 # Set a global seed for reproducibility
 )
@@ -80,17 +81,17 @@ list(
     )
   ),
   
-  tar_target(
-    panel_monthly_full,
-    apply_transformations(
-      raw_data_list = all_raw_data,
-      asset_metadata = asset_metadata,
-      # For the full panel, use the overall 'to' date from config as the window_to_date
-      window_to_date = as.Date(app_config$default$data$to), 
-      monthly_label = "end"
-    )
-  ),
-  
+        tar_target(
+          panel_monthly_full,
+          apply_transformations(
+            raw_data_list = all_raw_data,
+            asset_metadata = asset_metadata,
+            # For the full panel, use the overall 'to' date from config as the window_to_date
+            window_to_date = as.Date(app_config$default$data$to), 
+            monthly_label = "end",
+            app_config = app_config
+          )
+        ),  
   # Map the pipeline over each walk-forward window
   tar_target(
     wf_windows,

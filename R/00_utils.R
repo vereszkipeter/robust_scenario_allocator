@@ -69,8 +69,24 @@ ensure_app_config_defaults <- function(config) {
   if (is.null(config$default$models$min_dcc_obs)) {
     config$default$models$min_dcc_obs <- 100 # A reasonable default
   }
+
+  # Set a default for log_level if not present
+  if (is.null(config$default$log_level)) {
+    config$default$log_level <- "INFO"
+  }
   
   return(config)
+}
+
+# Logging utility
+log_message <- function(message, level = "INFO", app_config) {
+  log_levels <- c("DEBUG", "INFO", "WARN", "ERROR")
+  current_level <- match(app_config$default$log_level, log_levels)
+  message_level <- match(level, log_levels)
+  
+  if (message_level >= current_level) {
+    cat(sprintf("[%s] %s: %s\n", Sys.time(), level, message))
+  }
 }
 
 # A safer version of process_window that returns a structured error object
@@ -115,7 +131,7 @@ safely_process_window <- function(...) {
 #' @param solver_args list; additional named args passed to `CVXR::solve`
 #' @return If `allow_fallback = FALSE` returns CVXR result object on success.
 #'         If `allow_fallback = TRUE` returns list(result = CVXR_result_or_NULL, error = NULL_or_message)
-safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS"), allow_fallback = TRUE, verbose = FALSE, solver_args = list()) {
+safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS", "OSQP"), allow_fallback = TRUE, verbose = FALSE, solver_args = list()) {
   if (!requireNamespace("CVXR", quietly = TRUE)) {
     msg <- "Package 'CVXR' is required for safe_solve_cvxr"
     if (allow_fallback) return(list(result = NULL, error = msg)) else stop(msg)

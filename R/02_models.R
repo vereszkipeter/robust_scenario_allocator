@@ -11,7 +11,7 @@ library(rmgarch) # Already loaded, but good to explicitly state for context
 fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   library(bsvars) # Explicitly load bsvars inside the function
   
-  message("DEBUG: Starting fit_rsbvar_model.")
+  log_message("Starting fit_rsbvar_model.", level = "DEBUG", app_config = app_config)
   
   # bsvars expects a matrix or data.frame
   macro_matrix <- as.matrix(macro_data)
@@ -40,7 +40,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   B_matrix_initial <- matrix(TRUE, N, N)
   B_matrix_initial[upper.tri(B_matrix_initial)] <- FALSE # Lower triangular identification
   
-  message("DEBUG: Attempting to specify bsvars model with p=", bvar_lags, ", M=", M, ".")
+  log_message(paste0("Attempting to specify bsvars model with p=", bvar_lags, ", M=", M, "."), level = "DEBUG", app_config = app_config)
   spec <- tryCatch({
     bsvars::specify_bsvar_msh$new(
       data = macro_matrix,
@@ -52,9 +52,9 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     message("ERROR: bsvars::specify_bsvar_msh$new failed: ", e$message)
     stop(paste("bsvars::specify_bsvar_msh$new failed:", e$message))
   })
-  message("DEBUG: bsvars model specification complete. Class: ", paste(class(spec), collapse = ", "))
+  log_message(paste0("bsvars model specification complete. Class: ", paste(class(spec), collapse = ", ")), level = "DEBUG", app_config = app_config)
   
-  message("DEBUG: Attempting to estimate bsvars model with S=", n_iter_mcmc, ".")
+  log_message(paste0("Attempting to estimate bsvars model with S=", n_iter_mcmc, "."), level = "DEBUG", app_config = app_config)
   fitted_model <- tryCatch({
     bsvars::estimate(
       spec,
@@ -66,7 +66,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     message("ERROR: bsvars::estimate failed: ", e$message)
     stop(paste("bsvars::estimate failed:", e$message))
   })
-  message("DEBUG: bsvars model estimation complete. Class: ", paste(class(fitted_model), collapse = ", "))
+  log_message(paste0("bsvars model estimation complete. Class: ", paste(class(fitted_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
 
   # --- Convergence Diagnostics ---
   # Create a directory for diagnostics if it doesn't exist
@@ -95,17 +95,71 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   
   # Save trace plots to a PDF for visual inspection
   trace_plot_file <- file.path(diag_dir, paste0(window_name, "_trace_plots.pdf"))
-  tryCatch({
-    grDevices::pdf(trace_plot_file, width = 8, height = 10)
-    plot(fitted_model) # The default plot for bsvars objects is MCMC trace plots
-    grDevices::dev.off()
-    message(paste("RS-BVAR trace plots saved to", trace_plot_file))
-  }, error = function(e) {
-    warning(paste("Could not save RS-BVAR trace plots:", e$message))
-  })
+  
+  # Check for non-finite values in posterior draws before plotting
+  posterior_ok <- TRUE
+  if (!is.null(fitted_model) && !is.null(fitted_model$posterior)) {
+    for (param in names(fitted_model$posterior)) {
+      if (any(!is.finite(fitted_model$posterior[[param]]))) {
+        posterior_ok <- FALSE
+        warning(paste("Non-finite values found in posterior draws for parameter:", param, ". Skipping trace plot generation for window ", window_name, "."))
+        break
+      }
+    }
+  } else {
+    posterior_ok <- FALSE
+    warning(paste("Posterior draws not found in fitted_model. Skipping trace plot generation for window ", window_name, "."))
+  }
+
+  if (posterior_ok) {
+    tryCatch({
+      grDevices::pdf(trace_plot_file, width = 8, height = 10)
+      
+      # Extract MCMC draws and convert to coda::mcmc.list
+      mcmc_list_to_plot <- list()
+      
+      # Example: A matrix (autoregressive coefficients) and B matrix (contemporaneous relationships)
+      # For simplicity, let's take the first few elements of A and B
+      
+      # Check if posterior$A and posterior$B exist and have at least 3 dimensions
+      if (!is.null(fitted_model$posterior$A) && length(dim(fitted_model$posterior$A)) >= 3) {
+        # coda::mcmc expects a matrix where columns are variables and rows are iterations
+        # fitted_model$posterior$A is N_macro_vars x N_lags*N_macro_vars x N_draws
+        # Need to reshape this to (N_macro_vars * N_lags*N_macro_vars) x N_draws and then transpose
+        A_draws_matrix <- matrix(fitted_model$posterior$A, nrow = prod(dim(fitted_model$posterior$A)[1:2]), ncol = dim(fitted_model$posterior$A)[3])
+        mcmc_list_to_plot[["A"]] <- coda::mcmc(t(A_draws_matrix))
+      }
+      if (!is.null(fitted_model$posterior$B) && length(dim(fitted_model$posterior$B)) >= 3) {
+        # fitted_model$posterior$B is N_macro_vars x N_macro_vars x N_draws
+        B_draws_matrix <- matrix(fitted_model$posterior$B, nrow = prod(dim(fitted_model$posterior$B)[1:2]), ncol = dim(fitted_model$posterior$B)[3])
+        mcmc_list_to_plot[["B"]] <- coda::mcmc(t(B_draws_matrix))
+      }
+      
+      # If there are items to plot, create mcmc.list and plot
+      if (length(mcmc_list_to_plot) > 0) {
+        coda_mcmc_list <- coda::mcmc.list(mcmc_list_to_plot)
+        plot(coda_mcmc_list) # Plot using coda's generic plot method
+        log_message(paste("RS-BVAR trace plots saved to", trace_plot_file), level = "INFO", app_config = app_config)
+      } else {
+        warning(paste("No suitable posterior parameters found for plotting trace plots for window ", window_name, ". Creating skipped file."))
+        file.create(sub("\\.pdf$", "_skipped_no_params.txt", trace_plot_file))
+      }
+      
+      grDevices::dev.off()
+    }, error = function(e) {
+      # If plotting fails, ensure the PDF device is closed to avoid leaving it open
+      if(names(grDevices::dev.cur()) == "pdf") {
+         grDevices::dev.off()
+      }
+      warning(paste("Could not save RS-BVAR trace plots for window ", window_name, ":", e$message, ". Creating skipped file."))
+      file.create(sub("\\.pdf$", "_skipped_plot_error.txt", trace_plot_file))
+    })
+  } else {
+    file.create(sub("\\.pdf$", "_skipped_non_finite_posterior.txt", trace_plot_file))
+  }
   # --- End Convergence Diagnostics ---
   
-  message("DEBUG: Attempting to normalize posterior draws.")
+  log_message("Attempting to normalize posterior draws.", level = "DEBUG", app_config = app_config)
   fitted_model <- tryCatch({
     BB <- NULL
     # Try different paths to get the B matrix for normalization
@@ -136,9 +190,9 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     message("ERROR: bsvars::normalise_posterior failed: ", e$message)
     stop(paste("bsvars::normalise_posterior failed:", e$message))
   })
-  message("DEBUG: Posterior normalization attempt complete. Class: ", paste(class(fitted_model), collapse = ", "))
+  log_message(paste0("Posterior normalization attempt complete. Class: ", paste(class(fitted_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
   
-  message("DEBUG: fit_rsbvar_model finished successfully.")
+  log_message("fit_rsbvar_model finished successfully.", level = "DEBUG", app_config = app_config)
   return(list(fitted_model = fitted_model, spec = spec))
 }
 
@@ -148,18 +202,27 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
 #' @param asset_returns An xts object containing the asset returns time series.
 #' @return A fitted `DCCfit` object.
 fit_dcc_t_garch_model <- function(asset_returns, app_config) {
+  log_message("Starting DCC-GARCH model fitting.", level = "DEBUG", app_config = app_config)
+  
+  # Create diagnostics directory
+  diag_dir <- "output/dcc_diagnostics"
+  if (!dir.exists(diag_dir)) {
+    dir.create(diag_dir, recursive = TRUE)
+  }
+  
   # Remove NAs from the input data
   asset_returns <- na.omit(asset_returns)
 
   # Save the input data for inspection
-  saveRDS(asset_returns, "dcc_input.rds")
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  saveRDS(asset_returns, file.path(diag_dir, paste0("dcc_input_", timestamp, ".rds")))
 
-  message("DEBUG: NROW(asset_returns) inside fit_dcc_t_garch_model: ", NROW(asset_returns))
+  log_message(paste0("NROW(asset_returns) inside fit_dcc_t_garch_model: ", NROW(asset_returns)), level = "DEBUG", app_config = app_config)
 
   min_obs <- app_config$default$models$min_dcc_obs
   # Basic validation
   if (is.null(asset_returns) || NROW(asset_returns) < min_obs || NCOL(asset_returns) < 1) {
-    message("Insufficient data for DCC-GARCH fitting. Returning fallback with empirical moments.")
+    log_message(paste0("Insufficient data for DCC-GARCH fitting (", NROW(asset_returns), " obs, need ", min_obs, "). Returning fallback."), level = "WARN", app_config = app_config)
     emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(asset_returns, na.rm = TRUE) else numeric(0)
     emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
@@ -174,7 +237,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   # --- Stage 1: Fit univariate GARCH models individually for diagnostics ---
   for (i in 1:num_assets) {
     asset_name <- colnames(asset_returns)[i]
-    message("--- Fitting univariate GARCH for asset: ", asset_name, " ---")
+    log_message(paste0("--- Fitting univariate GARCH for asset: ", asset_name, " ---"), level = "DEBUG", app_config = app_config)
 
     uspec <- rugarch::ugarchspec(
       mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),
@@ -186,7 +249,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
     fit <- tryCatch({
       rugarch::ugarchfit(spec = uspec, data = asset_returns[, i, drop = TRUE], solver = app_config$default$models$dcc_solver)
     }, error = function(e) {
-      message("ERROR: Univariate GARCH fit failed for asset: ", asset_name, "; will use empirical fallback.")
+      log_message(paste0("Univariate GARCH fit failed for asset: ", asset_name, "; will use empirical fallback. Error: ", e$message), level = "ERROR", app_config = app_config)
       NULL
     })
 
@@ -195,7 +258,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
       return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
     }
   }
-  message("--- All univariate GARCH models fitted successfully. ---")
+  log_message("--- All univariate GARCH models fitted successfully. ---", level = "DEBUG", app_config = app_config)
 
   # --- Stage 2: If all univariate fits succeeded, proceed with DCC ---
 
@@ -207,44 +270,44 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
     )
   })
   multi_uspec <- rugarch::multispec(uspec_list)
-  message("DEBUG: multi_uspec created.")
-  saveRDS(multi_uspec, "multi_uspec.rds") # Save multi_uspec for inspection
+  log_message("multi_uspec created.", level = "DEBUG", app_config = app_config)
+  saveRDS(multi_uspec, file.path(diag_dir, paste0("multi_uspec_", timestamp, ".rds")))
 
-  message("DEBUG: Calling dccspec.")
+  log_message("Calling dccspec.", level = "DEBUG", app_config = app_config)
   dcc_spec <- rmgarch::dccspec(
     uspec = multi_uspec,
     dccOrder = c(1, 1),
     distribution = "mvt" # Changed from "mvt" to "mvnorm"
   )
-  saveRDS(dcc_spec, "dcc_spec.rds") # Save dcc_spec for inspection
+  saveRDS(dcc_spec, file.path(diag_dir, paste0("dcc_spec_", timestamp, ".rds")))
 
-  message("DEBUG: Calling dccfit with data dimensions: ", paste(dim(asset_returns), collapse = ", "))
-  message("DEBUG: Summary of asset_returns before dccfit:")
+  log_message(paste0("Calling dccfit with data dimensions: ", paste(dim(asset_returns), collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message("Summary of asset_returns before dccfit:", level = "DEBUG", app_config = app_config)
   print(summary(asset_returns))
 
   # Additional data quality checks before dccfit
   if (anyNA(asset_returns)) {
-    message("ERROR: NA values found in asset_returns just before dccfit. This should not happen after na.omit. Returning fallback.")
+    log_message("NA values found in asset_returns just before dccfit. This should not happen after na.omit. Returning fallback.", level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
   if (any(is.infinite(asset_returns))) {
-    message("ERROR: Infinite values found in asset_returns just before dccfit. Returning fallback.")
+    log_message("Infinite values found in asset_returns just before dccfit. Returning fallback.", level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
   if (NROW(asset_returns) < min_obs || NCOL(asset_returns) < 1) {
-    message("ERROR: Insufficient data dimensions (", NROW(asset_returns), " rows, ", NCOL(asset_returns), " cols) in asset_returns just before dccfit. Returning fallback.")
+    log_message(paste0("Insufficient data dimensions (", NROW(asset_returns), " rows, ", NCOL(asset_returns), " cols) in asset_returns just before dccfit. Returning fallback."), level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
 
-  message("DEBUG: Correlation matrix of asset_returns before dccfit:")
+  log_message("Correlation matrix of asset_returns before dccfit:", level = "DEBUG", app_config = app_config)
   tryCatch({
     print(cor(asset_returns, use = "pairwise.complete.obs"))
   }, error = function(e) {
-    message("WARNING: Could not compute correlation matrix: ", e$message)
+    log_message(paste0("Could not compute correlation matrix: ", e$message), level = "WARN", app_config = app_config)
   })
 
   # Save the asset_returns data right before the dccfit call
-  saveRDS(asset_returns, "dcc_input_for_fit.rds")
+  saveRDS(asset_returns, file.path(diag_dir, paste0("dcc_input_for_fit_", timestamp, ".rds")))
 
   dcc_fit_model <- tryCatch({
     rmgarch::dccfit(
@@ -254,7 +317,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
       solver.control = app_config$default$models$dcc_solver_control
     )
   }, error = function(e) {
-    message("DCC fit failed with error: ", e$message)
+    log_message(paste0("DCC fit failed with error: ", e$message), level = "ERROR", app_config = app_config)
     # Return fallback empirical moments to allow scenario generation to continue
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   })

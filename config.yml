@@ -38,12 +38,15 @@ default:
     dro_epsilon: 0.01 # Epsilon for Distributionally Robust Optimization (Wasserstein ball radius)
     entropy_penalty_kappa: 0.001 # Kappa for entropy regularization in DRO
     cvar_alpha: 0.05 # Alpha level for CVaR calculations (e.g., 0.05 for 95% CVaR)
+    cdar_beta: 0.95 # Beta level for CDaR calculations (e.g., 0.95 for 95% CDaR)
+    cdar_l2_gamma: 0.000001 # L2 regularization for CDaR optimization
     base_term_premium: 0.005 # Base term premium for placeholder model
     tp_sensitivity: 0.5 # Sensitivity of term premium to short rate for placeholder model
     confidence_level: 0.95 # Confidence level for Probabilistic Sharpe Ratio and Deflated Sharpe Ratio
     transaction_cost_flat_rate: 0.001 # Flat rate transaction cost applied at rebalancing
     dcc_solver: "nlminb" # Solver for DCC-GARCH model (e.g., "solnp", "nlminb", "lbfgs", "gosolnp")
     dcc_solver_control: {trace: 1} # Solver control options (e.g., {trace: 0} for solnp)
+  log_level: "DEBUG" # Logging level: DEBUG, INFO, WARN, ERROR
     # Add other model parameters here as needed
 
 # Future sections for models and optimization

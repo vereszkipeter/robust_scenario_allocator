@@ -48,9 +48,9 @@ evaluate_strategies_on_scenarios <- function(base_strategy_weights, simulated_sc
       weights <- base_strategy_weights[[strategy_name]] # Named vector of weights
       
       # DEBUGGING 1 START
-      # message("DEBUG: Strategy Name: ", strategy_name)
-      # message("DEBUG: Weights class: ", class(weights))
-      # message("DEBUG: Weights length: ", length(weights))
+      # log_message(paste0("Strategy Name: ", strategy_name), level = "DEBUG", app_config = app_config)
+      # log_message(paste0("Weights class: ", class(weights)), level = "DEBUG", app_config = app_config)
+      # log_message(paste0("Weights length: ", length(weights)), level = "DEBUG", app_config = app_config)
       # DEBUGGING 1 END
 
       # Ensure weights are aligned with asset_names_in_scenarios
@@ -60,18 +60,18 @@ evaluate_strategies_on_scenarios <- function(base_strategy_weights, simulated_sc
       ordered_weights[is.na(ordered_weights)] <- 0 # Assign 0 weight to missing assets
       
       # DEBUGGING 2 START
-      # message("DEBUG: Ordered weights class (before as.numeric): ", class(ordered_weights))
-      # message("DEBUG: Ordered weights length (before as.numeric): ", length(ordered_weights))
+      # log_message(paste0("Ordered weights class (before as.numeric): ", class(ordered_weights)), level = "DEBUG", app_config = app_config)
+      # log_message(paste0("Ordered weights length (before as.numeric): ", length(ordered_weights)), level = "DEBUG", app_config = app_config)
       # DEBUGGING 2 END
 
       # Ensure ordered_weights is a numeric vector
       ordered_weights <- as.numeric(ordered_weights)
       
       # DEBUGGING 3 START
-      # message("DEBUG: Ordered weights class (after as.numeric): ", class(ordered_weights))
-      # message("DEBUG: Ordered weights length (after as.numeric): ", length(ordered_weights))
-      # message("DEBUG: Current sim asset returns dim: ", paste(dim(current_sim_asset_returns), collapse = "x"))
-      # message("DEBUG: Current sim asset returns class: ", class(current_sim_asset_returns))
+      # log_message(paste0("Ordered weights class (after as.numeric): ", class(ordered_weights)), level = "DEBUG", app_config = app_config)
+      # log_message(paste0("Ordered weights length (after as.numeric): ", length(ordered_weights)), level = "DEBUG", app_config = app_config)
+      # log_message(paste0("Current sim asset returns dim: ", paste(dim(current_sim_asset_returns), collapse = "x")), level = "DEBUG", app_config = app_config)
+      # log_message(paste0("Current sim asset returns class: ", class(current_sim_asset_returns)), level = "DEBUG", app_config = app_config)
       # DEBUGGING 3 END
 
       portfolio_returns_current_strat <- current_sim_asset_returns %*% ordered_weights
@@ -250,7 +250,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
 #' @param historical_macro_data An xts object of historical monthly macro data.
 #' @param output_dir The directory to save the diagnostic plots.
 #' @return The file path to a dummy indicator file.
-perform_scenario_sanity_check <- function(simulated_scenarios, historical_returns, historical_macro_data, output_dir) {
+perform_scenario_sanity_check <- function(simulated_scenarios, historical_returns, historical_macro_data, output_dir, app_config) {
   
   if (!dir.exists(output_dir)) {
     dir.create(output_dir, recursive = TRUE)
@@ -349,11 +349,11 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
       rename(Sim = Var1, Horizon = Var2, MacroVar = Var3) %>%
       mutate(Horizon = as.numeric(Horizon))
     
-    message("DEBUG: class(macro_sims_long$Value) before quantile: ", class(macro_sims_long$Value))
-    message("DEBUG: summary(macro_sims_long$Value) before quantile: \n", capture.output(summary(macro_sims_long$Value)))
-    message("DEBUG: any(is.na(macro_sims_long$Value)) before quantile: ", any(is.na(macro_sims_long$Value)))
-    message("DEBUG: any(is.nan(macro_sims_long$Value)) before quantile: ", any(is.nan(macro_sims_long$Value)))
-    message("DEBUG: any(is.infinite(macro_sims_long$Value)) before quantile: ", any(is.infinite(macro_sims_long$Value)))
+    log_message(paste0("class(macro_sims_long$Value) before quantile: ", class(macro_sims_long$Value)), level = "DEBUG", app_config = app_config)
+    log_message(paste0("summary(macro_sims_long$Value) before quantile: \n", capture.output(summary(macro_sims_long$Value))), level = "DEBUG", app_config = app_config)
+    log_message(paste0("any(is.na(macro_sims_long$Value)) before quantile: ", any(is.na(macro_sims_long$Value))), level = "DEBUG", app_config = app_config)
+    log_message(paste0("any(is.nan(macro_sims_long$Value)) before quantile: ", any(is.nan(macro_sims_long$Value))), level = "DEBUG", app_config = app_config)
+    log_message(paste0("any(is.infinite(macro_sims_long$Value)) before quantile: ", any(is.infinite(macro_sims_long$Value))), level = "DEBUG", app_config = app_config)
 
     macro_fan_chart_data <- macro_sims_long %>%
       group_by(MacroVar, Horizon) %>%
@@ -414,6 +414,6 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
   # Create a dummy file to satisfy targets
   output_file <- file.path(output_dir, "scenario_sanity_check_complete.txt")
   writeLines(sanity_check_messages, output_file) # Write all collected messages
-  message("Scenario sanity check report generated:", output_file)
+  log_message(paste("Scenario sanity check report generated:", output_file), level = "INFO", app_config = app_config)
   return(output_file)
 }

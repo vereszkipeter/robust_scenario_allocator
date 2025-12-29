@@ -8,13 +8,13 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   
   # 3. Data Processing
   monthly_returns <- apply_transformations(raw_data_list = current_window_raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
-  message("DEBUG: NROW(monthly_returns) after transformations: ", NROW(monthly_returns))
+  log_message(paste0("NROW(monthly_returns) after transformations: ", NROW(monthly_returns)), level = "DEBUG", app_config = app_config)
   split_data <- split_data_by_type(monthly_returns, asset_metadata)
   asset_returns <- split_data$asset_returns |> na.omit() # Message to LLM: first row is NA what breaks subsequent calculations
-  message("DEBUG: NROW(asset_returns) before DCC-GARCH: ", NROW(asset_returns))
+  log_message(paste0("NROW(asset_returns) before DCC-GARCH: ", NROW(asset_returns)), level = "DEBUG", app_config = app_config)
   macro_data <- split_data$macro_data |> na.omit() # Message to LLM: some rows can be NAs what breaks subsequent calculations
-  message("DEBUG: Column names in monthly_returns: ", paste(colnames(monthly_returns), collapse = ", "))
-  message("DEBUG: Column names in macro_data before lagging: ", paste(colnames(macro_data), collapse = ", "))
+  log_message(paste0("Column names in monthly_returns: ", paste(colnames(monthly_returns), collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message(paste0("Column names in macro_data before lagging: ", paste(colnames(macro_data), collapse = ", ")), level = "DEBUG", app_config = app_config)
 
   macro_original_colnames <- colnames(macro_data)
   if (is.null(macro_data) || NCOL(macro_data) == 0) {
@@ -22,8 +22,8 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   } else {
     macro_data_filled <- na.locf(na.locf(macro_data, na.rm = FALSE), fromLast = TRUE)
     lagged_macro_data <- na.omit(lag.xts(macro_data_filled, k = 1))
-    message("DEBUG: Column names in lagged_macro_data: ", paste(colnames(lagged_macro_data), collapse = ", "))
-    message("DEBUG: Dimensions of lagged_macro_data: ", NROW(lagged_macro_data), " rows, ", NCOL(lagged_macro_data), " cols")
+    log_message(paste0("Column names in lagged_macro_data: ", paste(colnames(lagged_macro_data), collapse = ", ")), level = "DEBUG", app_config = app_config)
+    log_message(paste0("Dimensions of lagged_macro_data: ", NROW(lagged_macro_data), " rows, ", NCOL(lagged_macro_data), " cols"), level = "DEBUG", app_config = app_config)
   }
 
   # Enforce NA policy for modeling: prepare asset_returns for DCC
@@ -31,7 +31,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   if (!is.null(asset_returns) && NROW(asset_returns) > 0) {
     # Drop any rows with NA in asset returns for DCC estimation
     asset_returns_model <- na.omit(asset_returns)
-    message("DEBUG: asset_returns_model rows after na.omit: ", NROW(asset_returns_model))
+    log_message(paste0("asset_returns_model rows after na.omit: ", NROW(asset_returns_model)), level = "DEBUG", app_config = app_config)
     if (NROW(asset_returns_model) < min_dcc_obs) {
       message("WARNING: Insufficient asset_returns observations (", NROW(asset_returns_model), ") for reliable DCC estimation. DCC fit may fallback.")
     }
@@ -133,7 +133,8 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
       simulated_scenarios = simulated_scenarios,
       historical_returns = asset_returns,
       historical_macro_data = macro_data, # Add historical macro data
-      output_dir = sanity_check_dir
+      output_dir = sanity_check_dir,
+      app_config = app_config
     )
   }
 

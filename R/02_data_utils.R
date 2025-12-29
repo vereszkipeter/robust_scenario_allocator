@@ -63,31 +63,31 @@ cache_covers_request <- function(meta, from, to, source) {
 #' @title Get a valid integer seed
 #' @description Returns a valid integer seed. Prefer `tar_seed()` when available,
 #' but fall back to a derived integer from current time. Always returns an integer.
-get_valid_seed <- function() {
+get_valid_seed <- function(app_config) {
   s <- NA_integer_
-  message("DEBUG: get_valid_seed() called.")
+  log_message("get_valid_seed() called.", level = "DEBUG", app_config = app_config)
   # try tar_seed_get() if available
   if (exists("tar_seed_get", mode = "function")) {
     try({
       s_try <- tar_seed_get()
-      message("DEBUG: tar_seed_get() returned: ", s_try)
+      log_message(paste0("tar_seed_get() returned: ", s_try), level = "DEBUG", app_config = app_config)
       # Accept scalar numeric or integer-like seeds
       if (!is.null(s_try) && length(s_try) == 1 && !is.na(s_try) && is.finite(s_try)) {
         s <- as.integer(as.numeric(s_try))
-        message("DEBUG: s after tar_seed_get() and as.integer: ", s)
+        log_message(paste0("s after tar_seed_get() and as.integer: ", s), level = "DEBUG", app_config = app_config)
       }
     }, silent = TRUE)
   }
   if (is.na(s) || !is.finite(s) || length(s) != 1) {
-    message("DEBUG: Falling back to Sys.time() for seed generation. Current s: ", s)
+    log_message(paste0("Falling back to Sys.time() for seed generation. Current s: ", s), level = "DEBUG", app_config = app_config)
     # fallback to seconds since epoch mod int range
     s <- as.integer(as.numeric(Sys.time()) %% (.Machine$integer.max - 1))
-    message("DEBUG: s after fallback: ", s)
+    log_message(paste0("s after fallback: ", s), level = "DEBUG", app_config = app_config)
   }
   # Ensure seed is non-negative integer in valid range
   if (is.na(s) || s < 0) s <- as.integer(abs(s))
   s <- as.integer(s %% (.Machine$integer.max - 1))
-  message("DEBUG: Final seed value: ", s)
+  log_message(paste0("Final seed value: ", s), level = "DEBUG", app_config = app_config)
   return(s)
 }
 
