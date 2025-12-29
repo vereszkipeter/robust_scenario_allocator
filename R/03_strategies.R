@@ -61,20 +61,12 @@ calculate_min_cvar_weights <- function(asset_returns, app_config) {
 
 
 #' @title Calculate Minimum CDaR (Conditional Drawdown at Risk) Weights
-#' @description Calculates portfolio weights that minimize Conditional Drawdown at Risk (CDaR).
-#' Uses `PortfolioAnalytics` and a linear programming solver to achieve this.
+#' @description Calculates portfolio weights that minimize Conditional Drawdown at Risk (CDaR)
+#' using a custom CVXR implementation based on the problem's convex formulation.
 #' @param asset_returns An xts object of asset returns.
-#' @param portfolio_name A character string for the portfolio name.
-#' @param beta_cdar Numeric, the beta level for CDaR (e.g., 0.05 for 95% CDaR).
+#' @param app_config A list containing application configuration.
 #' @return A vector of portfolio weights.
 calculate_min_cdar_weights <- function(asset_returns, app_config) {
-  beta_cdar <- app_config$default$models$cdar_beta
-  
-  portf <- portfolio.spec(assets = colnames(asset_returns))
-  portf <- add.constraint(portf, type = "full_investment")
-  portf <- add.constraint(portf, type = "long_only")
-  portf <- add.objective(portf, type = "risk", name = "CDaR", arguments = list(p = beta_cdar))
-  
   # Preprocess: remove rows with NA and ensure enough data
   asset_returns_clean <- tryCatch({
     stats::na.omit(asset_returns)
@@ -84,43 +76,73 @@ calculate_min_cdar_weights <- function(asset_returns, app_config) {
     return(get_equal_weight_fallback(asset_returns, "Min-CDaR"))
   }
 
-  # Try methods in order: ROI, GLPK (if available), then randomized search as fallback
-  result <- try(optimize.portfolio(R = asset_returns_clean, portfolio = portf, optimize_method = "ROI", trace = FALSE), silent = TRUE)
+  asset_returns_mat <- as.matrix(asset_returns_clean)
+  T_obs <- nrow(asset_returns_mat)
+  N_assets <- ncol(asset_returns_mat)
+  
+  # Retrieve CDaR alpha from config, with a fallback
+  alpha_cdar <- app_config$default$models$cdar_beta %||% 0.95
 
-  if (inherits(result, "try-error")) {
-    roi_msg <- as.character(result)
-    warning("Min-CDaR ROI attempt failed: ", roi_msg)
+  # Define CVXR variables
+  w <- CVXR::Variable(N_assets)       # Portfolio weights
+  u <- CVXR::Variable(T_obs)          # Drawdown at each time point
+  zeta <- CVXR::Variable(1)           # CDaR threshold (like VaR for CVaR)
+  z <- CVXR::Variable(T_obs)          # Positive deviation from the threshold
 
-    # Try GLPK if available (preferred LP solver)
-    if (requireNamespace("Rglpk", quietly = TRUE) || requireNamespace("ROI.plugin.glpk", quietly = TRUE)) {
-      warning("Attempting Min-CDaR with GLPK solver (optimize_method = 'glpk').")
-      result_glpk <- try(optimize.portfolio(R = asset_returns_clean, portfolio = portf, optimize_method = "glpk", trace = FALSE), silent = TRUE)
-      if (!inherits(result_glpk, "try-error")) {
-        weights <- PortfolioAnalytics::extractWeights(result_glpk)
-        return(as.numeric(weights))
-      } else {
-        warning("Min-CDaR GLPK attempt failed: ", as.character(result_glpk))
+  # Portfolio returns at each time point (as an expression)
+  portfolio_returns <- asset_returns_mat %*% w
+
+  # Objective function
+  objective <- CVXR::Minimize(zeta + (1 / (T_obs * (1 - alpha_cdar))) * sum(z))
+
+  # Base constraints
+  constraints <- list(
+    sum(w) == 1,
+    w >= 0,
+    z >= 0,
+    z >= u - zeta,
+    u >= 0
+  )
+  
+  # Add drawdown constraints: u_t >= u_{t-1} - r_t'w, with u_0 = 0
+  # This is a standard LP formulation for drawdown.
+  drawdown_constraints <- list()
+  if (T_obs > 0) {
+    drawdown_constraints[[1]] <- u[1] >= -portfolio_returns[1]
+    if (T_obs > 1) {
+      for (t in 2:T_obs) {
+        # The drawdown at time t is at least the drawdown at t-1 minus the portfolio return at t
+        drawdown_constraints[[t]] <- u[t] >= u[t-1] - portfolio_returns[t]
       }
-    } else {
-      warning("GLPK not available; skipping GLPK attempt.")
     }
+  }
 
-    # Fallback: randomized search to get an approximate solution
-    random_search_size <- tryCatch({
-      app_config$default$models$mincdar_random_search_size
-    }, error = function(e) 2000)
-    warning("Falling back to randomized search for Min-CDaR (search_size=", random_search_size, ").")
-    result_rand <- try(optimize.portfolio(R = asset_returns_clean, portfolio = portf, optimize_method = "random", search_size = as.integer(random_search_size), trace = FALSE), silent = TRUE)
-    if (!inherits(result_rand, "try-error")) {
-      weights <- PortfolioAnalytics::extractWeights(result_rand)
-      return(as.numeric(weights))
-    }
+  all_constraints <- c(constraints, drawdown_constraints)
 
-    warning("All Min-CDaR optimization attempts failed; returning equal weights.")
-    return(get_equal_weight_fallback(asset_returns, "Min-CDaR"))
+  # Problem definition and solving
+  problem <- CVXR::Problem(objective, all_constraints)
+  
+  # Use the safe solver utility which should be available
+  solve_result <- tryCatch({
+    safe_solve_cvxr(problem, allow_fallback = TRUE, verbose = TRUE)
+  }, error = function(e) {
+    list(result = NULL, error = paste("CVXR solver failed:", e$message))
+  })
+
+  # Check if solver failed or did not produce an optimal result
+  if (!is.null(solve_result$error) || is.null(solve_result$result)) {
+    warning(paste("Custom Min-CDaR optimization failed with CVXR:", solve_result$error))
+    return(get_equal_weight_fallback(asset_returns, "Min-CDaR (CVXR)"))
+  }
+
+  cvxr_result <- solve_result$result
+  if (tolower(cvxr_result$status) %in% c("optimal", "optimal_inaccurate")) {
+    optimized_weights <- as.numeric(cvxr_result$getValue(w))
+    names(optimized_weights) <- colnames(asset_returns)
+    return(optimized_weights)
   } else {
-    weights <- PortfolioAnalytics::extractWeights(result)
-    return(as.numeric(weights))
+    warning(paste("Custom Min-CDaR with CVXR did not find an optimal solution. Status:", cvxr_result$status))
+    return(get_equal_weight_fallback(asset_returns, "Min-CDaR (CVXR)"))
   }
 }
 

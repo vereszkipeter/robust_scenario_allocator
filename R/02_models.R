@@ -67,6 +67,43 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     stop(paste("bsvars::estimate failed:", e$message))
   })
   message("DEBUG: bsvars model estimation complete. Class: ", paste(class(fitted_model), collapse = ", "))
+
+  # --- Convergence Diagnostics ---
+  # Create a directory for diagnostics if it doesn't exist
+  diag_dir <- "output/rsbvar_diagnostics"
+  if (!dir.exists(diag_dir)) {
+    dir.create(diag_dir, recursive = TRUE)
+  }
+  
+  # Generate a unique window name from the data's start and end dates
+  window_name <- "unidentified_window"
+  if (requireNamespace("xts", quietly = TRUE) && xts::is.xts(macro_data) && nrow(macro_data) > 0) {
+    start_date <- format(zoo::index(macro_data)[1], "%Y-%m-%d")
+    end_date <- format(zoo::index(macro_data)[nrow(macro_data)], "%Y-%m-%d")
+    window_name <- paste0("window_", start_date, "_to_", end_date)
+  }
+  
+  # Save summary statistics, which include potential convergence diagnostics like R-hat
+  summary_file <- file.path(diag_dir, paste0(window_name, "_summary.txt"))
+  tryCatch({
+    model_summary <- summary(fitted_model)
+    utils::capture.output(print(model_summary), file = summary_file)
+    message(paste("RS-BVAR model summary saved to", summary_file))
+  }, error = function(e) {
+    warning(paste("Could not save RS-BVAR model summary:", e$message))
+  })
+  
+  # Save trace plots to a PDF for visual inspection
+  trace_plot_file <- file.path(diag_dir, paste0(window_name, "_trace_plots.pdf"))
+  tryCatch({
+    grDevices::pdf(trace_plot_file, width = 8, height = 10)
+    plot(fitted_model) # The default plot for bsvars objects is MCMC trace plots
+    grDevices::dev.off()
+    message(paste("RS-BVAR trace plots saved to", trace_plot_file))
+  }, error = function(e) {
+    warning(paste("Could not save RS-BVAR trace plots:", e$message))
+  })
+  # --- End Convergence Diagnostics ---
   
   message("DEBUG: Attempting to normalize posterior draws.")
   fitted_model <- tryCatch({

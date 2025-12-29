@@ -21,7 +21,7 @@ default:
 
   # Model Parameters
   models:
-    bvar_lags: 2
+    bvar_lags: 1
 
     # RS-BVAR Model Parameters
     rsbvar_n_iter_mcmc: 2000

@@ -7,4 +7,5 @@ renv/
 data/raw/*.csv
 output/
 docs_context/
-data/cache/
+data/cache/*.rds
+*.rds
