@@ -39,7 +39,7 @@ evaluate_strategies_on_scenarios <- function(base_strategy_weights, simulated_sc
   for (s in 1:n_sim) {
     # Extract asset returns for the current simulation: horizon x n_assets_in_scenarios
     # ensure it's a matrix for matrix multiplication
-    current_sim_asset_returns <- matrix(asset_scenarios[s, , ], ncol = n_assets_in_scenarios)
+    current_sim_asset_returns <- asset_scenarios[s, , ]
     colnames(current_sim_asset_returns) <- asset_names_in_scenarios
 
     # Loop through each strategy
@@ -96,23 +96,30 @@ evaluate_strategies_on_scenarios <- function(base_strategy_weights, simulated_sc
 #' @param asset_metadata A tibble containing asset information, used to align tickers.
 #' @param app_config A list containing application configuration.
 #' @return A list containing out-of-sample performance metrics and the OOS portfolio returns.
-calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_date, asset_metadata, app_config) {
+calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_date, asset_metadata, app_config, preloaded_raw_data = NULL) {
   
   # Ensure necessary functions are available (get_all_raw_data, apply_transformations)
   # These should be sourced globally by _targets.R.
 
-  # 1. Fetch historical data for the OOS period
-  oos_raw_data <- get_all_raw_data(
-    asset_metadata = asset_metadata,
-    cache_dir = app_config$default$cache_dir,
-    from = oos_from_date,
-    to = oos_to_date
-  )
+  # 1. Obtain historical data for the OOS period. Prefer `preloaded_raw_data` when available.
+  if (!is.null(preloaded_raw_data)) {
+    # Trim each series to the requested oos range
+    oos_raw_data <- lapply(preloaded_raw_data, function(x) x[paste0(oos_from_date, "::", oos_to_date)])
+  } else {
+    oos_raw_data <- get_all_raw_data(
+      asset_metadata = asset_metadata,
+      cache_dir = app_config$default$cache_dir,
+      from = oos_from_date,
+      to = oos_to_date
+    )
+  }
 
   # 2. Transform raw data to monthly returns for the OOS period
   oos_monthly_returns <- apply_transformations(
-    raw_data = oos_raw_data,
-    asset_metadata = asset_metadata
+    raw_data_list = oos_raw_data,
+    asset_metadata = asset_metadata,
+    window_to_date = oos_to_date,
+    app_config = app_config
   )
   
   # Filter only asset returns (excluding macro variables)

@@ -61,7 +61,8 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
     rsbvar_fitted_model = fitted_rsbvar_model,
     rsbvar_spec = fitted_rsbvar_spec,
     macro_original_colnames = macro_original_colnames, # Add original macro column names
-    dcc_garch_model = fitted_dcc_garch_model
+    dcc_garch_model = fitted_dcc_garch_model,
+    macro_data = lagged_macro_data
   )
 
   # 5. Scenario generation
@@ -115,8 +116,27 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
     ),
     error = function(e) {
       message("generate_full_scenarios failed: ", e$message)
-      # Return a minimal placeholder so downstream steps can continue in a degraded mode
-      return(list(macro_scenarios = NULL, asset_scenarios = array(0, dim = c(app_config$default$n_simulations, app_config$default$horizon_months, ncol(asset_returns)), dimnames = list(NULL, NULL, colnames(asset_returns)))))
+      # Attempt a graceful fallback: build an empirical DCC fallback using sample moments
+      emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(as.matrix(asset_returns), na.rm = TRUE) else numeric(0)
+      emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
+      if (length(emp_mean) > 0 && !any(is.na(emp_cov))) {
+        fallback_dcc <- list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns))
+        # Retry scenario generation with fallback DCC object (which generate_full_scenarios handles)
+        try({
+          fitted_generative_model$dcc_garch_model <- fallback_dcc
+          return(generate_full_scenarios(
+            fitted_generative_model,
+            n_sim = app_config$default$n_simulations,
+            horizon = app_config$default$horizon_months,
+            asset_metadata = asset_metadata,
+            last_historical_levels = last_historical_data_levels,
+            app_config = app_config
+          ))
+        }, silent = TRUE)
+      }
+      # As a last resort return NA-filled scenarios so diagnostics are obvious (avoid flat zero paths)
+      na_asset_array <- array(NA_real_, dim = c(app_config$default$n_simulations, app_config$default$horizon_months, ncol(asset_returns)), dimnames = list(NULL, NULL, colnames(asset_returns)))
+      return(list(macro_scenarios = NULL, asset_scenarios = na_asset_array))
     }
   )
 # browser()

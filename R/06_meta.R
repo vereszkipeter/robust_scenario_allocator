@@ -16,85 +16,63 @@ library(dplyr) # For data manipulation
 perform_distributionally_robust_optimization <- function(base_strategy_pnl_on_scenarios, scenario_probabilities, app_config) {
   
   # Extract relevant dimensions and parameters
-  horizon <- dim(base_strategy_pnl_on_scenarios)[1] - 1 # P&L includes initial capital
+  horizon <- dim(base_strategy_pnl_on_scenarios)[1] - 1
   n_strategies <- dim(base_strategy_pnl_on_scenarios)[2]
   n_sim <- dim(base_strategy_pnl_on_scenarios)[3]
   strategy_names <- dimnames(base_strategy_pnl_on_scenarios)[[2]]
   
-  # DRO parameters from app_config
   dro_epsilon <- app_config$default$models$dro_epsilon
   entropy_penalty_kappa <- app_config$default$models$entropy_penalty_kappa
-  alpha_cvar <- app_config$default$models$cvar_alpha # Alpha for CVaR calculation
+  alpha_cvar <- app_config$default$models$cvar_alpha
 
-  # Extract terminal P&L for each strategy and each simulation
-  # Dimensions: n_strategies x n_sim
   terminal_pnl_strategies <- base_strategy_pnl_on_scenarios[horizon + 1, , ]
   
-  # Ensure terminal_pnl_strategies is a matrix for CVXR if only one strategy/sim
   if (is.null(dim(terminal_pnl_strategies))) {
     terminal_pnl_strategies <- matrix(terminal_pnl_strategies, nrow = n_strategies, ncol = n_sim)
   }
 
   # Define CVXR variables
-  theta <- Variable(n_strategies, name = "meta_weights") # Weights for base strategies
-  zeta <- Variable(1, name = "cvar_value")             # Auxiliary variable for CVaR
-  alpha_dual <- Variable(1, name = "alpha_dual", pos = TRUE) # Dual variable for Wasserstein ball (lambda in formulation)
-  beta_dual <- Variable(n_sim, name = "beta_dual", pos = TRUE) # Dual variables for each scenario (beta_s in formulation)
+  theta <- Variable(n_strategies, name = "meta_weights")
+  zeta <- Variable(1, name = "cvar_value")
+  alpha_dual <- Variable(1, name = "alpha_dual", pos = TRUE)
+  beta_dual <- Variable(n_sim, name = "beta_dual", pos = TRUE)
 
-  # Portfolio terminal P&L for each scenario (vector of length n_sim)
-  # Note: CVXR matrix multiplication ' %*% ' is automatically vectorized
-  portfolio_terminal_pnl_scenarios <- t(theta) %*% terminal_pnl_strategies
+  # Portfolio terminal P&L for each scenario.
+  # We want an expression of dimension n_sim x 1.
+  # terminal_pnl_strategies is n_strategies x n_sim. theta is n_strategies x 1.
+  # So, t(terminal_pnl_strategies) %*% theta gives (n_sim x n_strategies) %*% (n_strategies x 1) -> n_sim x 1.
+  portfolio_terminal_pnl_scenarios <- t(terminal_pnl_strategies) %*% theta
+  
+  # --- FIX: Vectorized DRO constraint ---
+  dro_constraint <- beta_dual >= -portfolio_terminal_pnl_scenarios - zeta - alpha_dual
   
   # Constraints for meta-weights
   constraints <- list(
     sum(theta) == 1,
-    theta >= 0 # Long-only constraint
+    theta >= 0,
+    dro_constraint
   )
   
-  # Constraints for DRO dual problem
-  # beta_dual[s] >= -(portfolio_terminal_pnl_scenarios[s] - zeta) - alpha_dual
-  # This corresponds to the CVaR definition: Loss_s + zeta + alpha_dual <= beta_dual
-  # Or: Loss_s - zeta - alpha_dual <= beta_dual
-  # Where Loss_s = -portfolio_terminal_pnl_scenarios[s]
-  # So: -portfolio_terminal_pnl_scenarios[s] - zeta - alpha_dual <= beta_dual
-  
-  for (s in 1:n_sim) {
-    constraints <- c(constraints, 
-                     beta_dual[s] >= -portfolio_terminal_pnl_scenarios[s] - zeta - alpha_dual)
-  }
-  
-  # Objective: Minimize worst-case CVaR with entropy regularization
-  # CVaR component: zeta + (1 / (1 - alpha_cvar)) * (sum(scenario_probabilities * beta_dual) - alpha_dual * dro_epsilon)
-  # Entropy regularization: entropy_penalty_kappa * sum(theta * log(theta))
-  # Note: sum(theta * log(theta)) is the negative entropy. CVXR's Entropy() function is -sum(x*log(x)).
-  # So, for an entropy *penalty* (to encourage diversification), we want to add a positive term:
-  # -entropy_penalty_kappa * sum(theta * log(theta)) or entropy_penalty_kappa * Entropy(theta).
-  # We are minimizing, so adding Entropy(theta) encourages less entropy (more concentration).
-  # To encourage diversification, we want to maximize entropy, so we MINIMIZE -Entropy(theta).
-  # Hence: + entropy_penalty_kappa * sum(theta * log(theta)) (if sum(x*log(x)) is the definition of entropy)
-  # CVXR's Entropy(x) is -sum(x*log(x)), so we want to add -entropy_penalty_kappa * Entropy(theta) to minimize.
-  
-  # The formulation should be: minimize worst_case_CVaR - entropy_penalty_kappa * Entropy(theta)
-  # or minimize worst_case_CVaR + entropy_penalty_kappa * sum(theta * log(theta))
-  
-  # Let's use the explicit sum(theta*log(theta)) form for clarity of convexity in CVXR.
-  # term sum(theta * log(theta)) is convex on theta > 0.
-  
-  # Correct objective function combining DRO-CVaR and Entropy Regularization
+  # --- FIX: Correctly formulate entropy penalty using DCP-compliant sum_entr ---
+  # The goal is to minimize the negative entropy: sum(theta * log(theta)).
+  # CVXR's sum_entr(x) calculates sum(-x * log(x)).
+  # Therefore, sum(theta * log(theta)) is equivalent to -sum_entr(theta).
   objective <- Minimize(
-    zeta + (1 / (1 - alpha_cvar)) * (sum(scenario_probabilities * beta_dual) - alpha_dual * dro_epsilon) + 
-    entropy_penalty_kappa * sum(theta * log(theta))
+    zeta + (1 / (1 - alpha_cvar)) * (sum(scenario_probabilities * beta_dual) - alpha_dual * dro_epsilon) 
+    - entropy_penalty_kappa * sum_entries(entr(theta))
   )
   
-  # Formulate and solve the problem
   problem <- Problem(objective, constraints)
 
-  # Use safe CVXR wrapper; fail fast on solver errors so issues surface during development
   cvxr_res <- safe_solve_cvxr(problem, solvers = c("ECOS", "SCS"), allow_fallback = FALSE)
 
-  # Extract optimal meta-weights (will stop earlier if solver failed)
   optimal_weights <- as.numeric(cvxr_res$getValue(theta))
-  names(optimal_weights) <- strategy_names
+  # Guard: only assign names if lengths match
+  if (!is.null(strategy_names) && length(optimal_weights) == length(strategy_names)) {
+    names(optimal_weights) <- strategy_names
+  } else {
+    log_message(paste0("Strategy names length (", length(strategy_names), ") does not match optimal_weights length (", length(optimal_weights), "). Skipping names assignment."), level = "WARN", app_config = app_config)
+  }
   message("DRO meta-optimization solved successfully using CVXR.")
   
   return(optimal_weights)

@@ -73,22 +73,30 @@ get_valid_seed <- function(app_config) {
       log_message(paste0("tar_seed_get() returned: ", s_try), level = "DEBUG", app_config = app_config)
       # Accept scalar numeric or integer-like seeds
       if (!is.null(s_try) && length(s_try) == 1 && !is.na(s_try) && is.finite(s_try)) {
-        s <- as.integer(as.numeric(s_try))
-        log_message(paste0("s after tar_seed_get() and as.integer: ", s), level = "DEBUG", app_config = app_config)
+        s <- as.numeric(s_try)
       }
     }, silent = TRUE)
   }
-  if (is.na(s) || !is.finite(s) || length(s) != 1) {
-    log_message(paste0("Falling back to Sys.time() for seed generation. Current s: ", s), level = "DEBUG", app_config = app_config)
-    # fallback to seconds since epoch mod int range
-    s <- as.integer(as.numeric(Sys.time()) %% (.Machine$integer.max - 1))
-    log_message(paste0("s after fallback: ", s), level = "DEBUG", app_config = app_config)
+  if (is.na(s) || !is.finite(s)) {
+    log_message("Falling back to Sys.time() for seed generation.", level = "DEBUG", app_config = app_config)
+    # fallback to seconds since epoch
+    s <- as.numeric(Sys.time())
   }
-  # Ensure seed is non-negative integer in valid range
-  if (is.na(s) || s < 0) s <- as.integer(abs(s))
-  s <- as.integer(s %% (.Machine$integer.max - 1))
-  log_message(paste0("Final seed value: ", s), level = "DEBUG", app_config = app_config)
-  return(s)
+  
+  # Ensure the seed is a single, positive integer within the valid 32-bit range.
+  # 1. Take absolute value to handle negatives from tar_seed_get()
+  # 2. Use modulo to wrap it into the positive integer range.
+  # 3. Subtract 1 from integer.max to avoid boundary issues.
+  # 4. Final as.integer coercion.
+  final_seed <- as.integer(abs(s) %% (.Machine$integer.max - 1))
+
+  # It must not be NA or zero
+  if(is.na(final_seed) || final_seed == 0) {
+      final_seed <- as.integer(as.numeric(Sys.time()) %% 1e9)
+  }
+
+  log_message(paste0("Final seed value: ", final_seed), level = "DEBUG", app_config = app_config)
+  return(final_seed)
 }
 
 

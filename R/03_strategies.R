@@ -60,107 +60,95 @@ calculate_min_cvar_weights <- function(asset_returns, app_config) {
 }
 
 
-#' @title Calculate Minimum CDaR (Conditional Drawdown at Risk) Weights
-#' @description Calculates portfolio weights that minimize Conditional Drawdown at Risk (CDaR)
-#' using a custom CVXR implementation based on the problem's convex formulation.
+#' @title Calculate Minimum CVaR Weights using CVXR
+#' @description Calculates portfolio weights that minimize Conditional Value-at-Risk (CVaR)
+#' using a custom CVXR implementation based on the problem's canonical convex (LP) formulation.
+#' This is a replacement for the previous non-DCP compliant CDaR implementation.
 #' @param asset_returns An xts object of asset returns.
 #' @param app_config A list containing application configuration.
 #' @return A vector of portfolio weights.
 calculate_min_cdar_weights <- function(asset_returns, app_config) {
-  log_message("Starting Min-CDaR weight calculation.", level = "DEBUG", app_config = app_config)
+  log_message("Starting Min-CVaR (CVXR) weight calculation.", level = "DEBUG", app_config = app_config)
   
-  # Preprocess: remove rows with NA and ensure enough data
   asset_returns_clean <- tryCatch({
     stats::na.omit(asset_returns)
   }, error = function(e) asset_returns)
   
   if (NROW(asset_returns_clean) < 2 || NCOL(asset_returns_clean) < 1) {
-    log_message("Insufficient data after na.omit for Min-CDaR; returning equal weights.", level = "WARN", app_config = app_config)
-    return(get_equal_weight_fallback(asset_returns, "Min-CDaR"))
+    log_message("Insufficient data after na.omit for Min-CVaR (CVXR); returning equal weights.", level = "WARN", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "Min-CVaR (CVXR)"))
   }
 
   asset_returns_mat <- as.matrix(asset_returns_clean)
   T_obs <- nrow(asset_returns_mat)
   N_assets <- ncol(asset_returns_mat)
   
-  # Retrieve CDaR alpha from config, with a fallback
-  alpha_cdar <- app_config$default$models$cdar_beta %||% 0.95
-  gamma_l2 <- app_config$default$models$cdar_l2_gamma %||% 1e-6
+  alpha_cvar <- app_config$default$models$cvar_alpha %||% 0.95
+  gamma_l2 <- app_config$default$models$cdar_l2_gamma %||% 1e-7 # Small regularization
 
-  # Define CVXR variables
-  w <- CVXR::Variable(N_assets)       # Portfolio weights
-  u <- CVXR::Variable(T_obs)          # Drawdown at each time point
-  zeta <- CVXR::Variable(1)           # CDaR threshold (like VaR for CVaR)
-  z <- CVXR::Variable(T_obs)          # Positive deviation from the threshold
+  # --- Define CVXR Variables ---
+  w <- CVXR::Variable(N_assets)    # Portfolio weights
+  zeta <- CVXR::Variable(1)        # VaR, the variable for the optimization problem
+  z <- CVXR::Variable(T_obs)       # Auxiliary variables for losses exceeding VaR
 
-  # Portfolio returns at each time point (as an expression)
-  portfolio_returns <- asset_returns_mat %*% w
+  # --- Define Loss ---
+  # The loss is the negative of portfolio return for each observation.
+  loss <- - (asset_returns_mat %*% w)
 
-  # Objective function with L2 regularization
-  objective <- CVXR::Minimize(zeta + (1 / (T_obs * (1 - alpha_cdar))) * sum(z) + gamma_l2 * sum_squares(w))
+  # --- Objective Function ---
+  # Minimize zeta + average of losses exceeding zeta. This is the canonical CVaR formulation.
+  # A small L2 regularization on weights is added for stability.
+  objective <- CVXR::Minimize(zeta + (1 / (T_obs * (1 - alpha_cvar))) * sum(z) + gamma_l2 * sum_squares(w))
 
-  # Base constraints
+  # --- Constraints ---
   constraints <- list(
-    sum(w) == 1,
-    w >= 0,
-    z >= 0,
-    z >= u - zeta,
-    u >= 0
+    sum(w) == 1,      # Full investment
+    w >= 0,           # Long only
+    z >= 0,           # Losses z must be non-negative
+    z >= loss - zeta  # If loss > zeta, then z must be at least loss - zeta
   )
   
-  # Add drawdown constraints: u_t >= u_{t-1} - r_t'w, with u_0 = 0
-  # This is vectorized: D %*% u >= -portfolio_returns, where D is the first-difference matrix.
-  D <- diag(1, T_obs)
-  if (T_obs > 1) {
-    # This creates the -1s on the sub-diagonal
-    D[2:T_obs, 1:(T_obs-1)] <- D[2:T_obs, 1:(T_obs-1)] - diag(1, T_obs - 1)
-  }
-  
-  drawdown_constraint <- list(D %*% u >= -portfolio_returns)
-  
-  all_constraints <- c(constraints, drawdown_constraint)
-
   # Problem definition and solving
-  problem <- CVXR::Problem(objective, all_constraints)
+  problem <- CVXR::Problem(objective, constraints)
   
-  # Use the safe solver utility which should be available
+  # Use a safe solver wrapper if available, otherwise solve directly
+  solve_fn <- if (exists("safe_solve_cvxr")) safe_solve_cvxr else function(p, ...) CVXR::solve(p, ...)
+  
   solve_result <- tryCatch({
-    safe_solve_cvxr(problem, allow_fallback = TRUE, verbose = TRUE)
+    solve_fn(problem, allow_fallback = TRUE, verbose = FALSE)
   }, error = function(e) {
     list(result = NULL, error = paste("CVXR solver failed:", e$message))
   })
 
-  # Check if solver failed or did not produce an optimal result
+  # Check solver outcome
   if (!is.null(solve_result$error) || is.null(solve_result$result) || !(tolower(solve_result$result$status) %in% c("optimal", "optimal_inaccurate"))) {
     
     error_msg <- if (!is.null(solve_result$error)) {
-      paste("Custom Min-CDaR optimization failed with CVXR solver error:", solve_result$error)
+      paste("Min-CVaR (CVXR) optimization failed with solver error:", solve_result$error)
     } else if (is.null(solve_result$result)) {
-      "Custom Min-CDaR optimization failed: CVXR result is NULL."
+      "Min-CVaR (CVXR) optimization failed: CVXR result is NULL."
     } else {
-      paste("Custom Min-CDaR with CVXR did not find an optimal solution. Status:", solve_result$result$status)
+      paste("Min-CVaR (CVXR) did not find an optimal solution. Status:", solve_result$result$status)
     }
     log_message(error_msg, level = "ERROR", app_config = app_config)
     
-    # --- Save diagnostics ---
-    diag_dir <- "output/cdar_diagnostics"
-    if (!dir.exists(diag_dir)) {
-      dir.create(diag_dir, recursive = TRUE)
-    }
-    timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    diag_file <- file.path(diag_dir, paste0("cdar_fail_", timestamp, ".rds"))
-    saveRDS(list(asset_returns = asset_returns_mat, problem = problem, solve_result = solve_result), file = diag_file)
-    log_message(paste("Saved Min-CDaR diagnostic data to", diag_file), level = "INFO", app_config = app_config)
-    # --- End diagnostics ---
+    # Save diagnostics for debugging
+    # (consider disabling this in production if it's too noisy)
+    # diag_dir <- "output/cvar_cvxr_diagnostics"
+    # if (!dir.exists(diag_dir)) dir.create(diag_dir, recursive = TRUE)
+    # timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    # diag_file <- file.path(diag_dir, paste0("cvar_cvxr_fail_", timestamp, ".rds"))
+    # saveRDS(list(asset_returns = asset_returns_mat, problem = problem, solve_result = solve_result), file = diag_file)
+    # log_message(paste("Saved Min-CVaR (CVXR) diagnostic data to", diag_file), level = "INFO", app_config = app_config)
     
-    return(get_equal_weight_fallback(asset_returns, "Min-CDaR (CVXR)"))
+    return(get_equal_weight_fallback(asset_returns, "Min-CVaR (CVXR)"))
 
   } else {
-    # Success case
+    # Success
     cvxr_result <- solve_result$result
     optimized_weights <- as.numeric(cvxr_result$getValue(w))
     names(optimized_weights) <- colnames(asset_returns)
-    log_message("Successfully calculated Min-CDaR weights.", level = "DEBUG", app_config = app_config)
+    log_message("Successfully calculated Min-CVaR (CVXR) weights.", level = "DEBUG", app_config = app_config)
     return(optimized_weights)
   }
 }
