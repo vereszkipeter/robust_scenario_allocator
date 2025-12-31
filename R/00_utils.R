@@ -35,21 +35,36 @@ identity_transform_inverse <- function(x, last_level) {
 }
 
 
-# Month-over-month change for inflation-like series
+# Month-over-month change for inflation-like series (log-difference)
 mom_change <- function(x) {
-  x / stats::lag(x, k = 1) - 1
+  # For inflation and industrial production, values are typically positive.
+  log_x <- log(x)
+  diff_log_x <- diff(log_x, lag = 1)
+  # Ensure the output is an xts object with the correct index
+  return(diff_log_x)
 }
 
-# Inverse of month-over-month change
+# Inverse of month-over-month log-difference
 undo_mom_change <- function(sim_series, last_level) {
-  reconstructed <- numeric(length(sim_series))
-  reconstructed[1] <- last_level * (1 + sim_series[1])
+  reconstructed_log_x <- numeric(length(sim_series))
+  
+  # Start with the log of the last_level
+  log_last_level <- log(last_level)
+
+  # Reconstruct the log series
+  reconstructed_log_x[1] <- sim_series[1] + log_last_level
   if (length(sim_series) > 1) {
     for (t in 2:length(sim_series)) {
-      reconstructed[t] <- reconstructed[t-1] * (1 + sim_series[t])
+      reconstructed_log_x[t] <- sim_series[t] + reconstructed_log_x[t-1]
     }
   }
-  return(reconstructed)
+  # Convert back to levels
+  reconstructed_x <- exp(reconstructed_log_x)
+  # Ensure output is an xts object if input sim_series was xts
+  if (inherits(sim_series, "xts")) {
+    reconstructed_x <- xts(reconstructed_x, order.by = index(sim_series))
+  }
+  return(reconstructed_x)
 }
 
 # Ensure app_config has all necessary defaults to avoid NULLs
@@ -88,37 +103,6 @@ log_message <- function(message, level = "INFO", app_config) {
     cat(sprintf("[%s] %s: %s\n", Sys.time(), level, message))
   }
 }
-
-# A safer version of process_window that returns a structured error object
-# This allows the overall `tar_make` process to continue even if one window fails
-safely_process_window <- function(...) {
-  tryCatch({
-    # The `...` will capture all arguments passed by purrr::pmap
-    process_window(...)
-  }, error = function(e) {
-    # Extract window_id from the arguments passed to the function
-    args <- list(...)
-    window_id_val <- if (!is.null(args$window_id)) args$window_id else "UNKNOWN"
-    
-    # Log the detailed error for debugging
-    message(sprintf("Error processing window_id %s: %s", window_id_val, e$message))
-    
-    # Return a list with an error field, and NULL for other expected outputs
-    list(
-      window_id = window_id_val,
-      error = e$message,
-      val_date = NULL,
-      oos_from_date = NULL,
-      oos_to_date = NULL,
-      optimal_weights = NULL,
-      base_strategy_pnl_on_scenarios = NULL,
-      entropy_pooled_probabilities = NULL,
-      oos_performance = NULL,
-      ew_benchmark_oos_performance = NULL
-    )
-  })
-}
-
 
 #' Safe CVXR solver wrapper
 #' Tries a sequence of CVXR solvers and returns either the CVXR result (on success)

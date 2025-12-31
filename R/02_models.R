@@ -15,10 +15,11 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   log_message("Starting fit_rsbvar_model.", level = "DEBUG", app_config = app_config)
 
   macro_matrix <- as.matrix(macro_data)
+  log_message(paste0("Dimensions of macro_matrix for RS-BVAR: ", NROW(macro_matrix), " rows, ", NCOL(macro_matrix), " cols."), level = "DEBUG", app_config = app_config)
 
   if (NCOL(macro_matrix) < 2) {
     log_message(paste0("WARNING: macro_data has less than 2 columns (", NCOL(macro_matrix), "). Skipping RS-BVAR model fitting."), level = "WARN", app_config = app_config)
-    # Create a placeholder diagnostic file for visibility
+    # Create a diagnostic file (e.g., for debugging) for visibility
     diag_dir <- "output/rsbvar_diagnostics"
     if (!dir.exists(diag_dir)) dir.create(diag_dir, recursive = TRUE)
     window_name <- "unidentified_window"
@@ -88,20 +89,50 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     psi = bsvars::specify_psi_inv(scale = 1e-4, shape = 1)   # Informative prior on error covariance
   )
   
-  log_message(paste0("Attempting to estimate bsvars model with S=", n_iter_mcmc, "."), level = "DEBUG", app_config = app_config)
-  fitted_model <- tryCatch({
+  log_message(paste0("Starting burn-in for bsvars model with S=", n_burnin_mcmc, "."), level = "DEBUG", app_config = app_config)
+  burn_in_model <- tryCatch({
     bsvars::estimate(
       spec,
-      S = n_iter_mcmc,
+      S = n_burnin_mcmc,
       thin = 1,
       prior = prior_spec, # Pass the tighter priors
       show_progress = FALSE
     )
   }, error = function(e) {
-    log_message(paste0("ERROR: bsvars::estimate failed: ", e$message), level = "ERROR", app_config = app_config)
-    stop(paste("bsvars::estimate failed:", e$message))
+    log_message(paste0("ERROR: bsvars burn-in estimate failed: ", e$message), level = "ERROR", app_config = app_config)
+    stop(paste("bsvars burn-in estimate failed:", e$message))
+  })
+  log_message(paste0("Burn-in complete. Continuing estimation for bsvars model with total S=", n_iter_mcmc, "."), level = "DEBUG", app_config = app_config)
+  
+  fitted_model <- tryCatch({
+    bsvars::estimate(
+      burn_in_model,
+      S = n_iter_mcmc, # Total number of MCMC draws, including burn-in
+      thin = 1,
+      show_progress = FALSE
+    )
+  }, error = function(e) {
+    log_message(paste0("ERROR: bsvars final estimate failed: ", e$message), level = "ERROR", app_config = app_config)
+    stop(paste("bsvars final estimate failed:", e$message))
   })
   log_message(paste0("bsvars model estimation complete. Class: ", paste(class(fitted_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
+
+  # --- Normalization for MSH models ---
+  if (!is.null(fitted_model) && inherits(fitted_model, "bsvar")) {
+    log_message("Attempting to normalize posterior draws for interpretability.", level = "DEBUG", app_config = app_config)
+    tryCatch({
+      # Calculate B_hat (median of posterior draws for B)
+      B_hat <- apply(fitted_model$posterior$B, c(1, 2), median) # B_hat is (N x N) matrix
+      
+      # Normalize the posterior draws for interpretability
+      fitted_model <- bsvars::normalise_posterior(fitted_model, B_hat)
+      log_message("Posterior draws normalized using the median B_hat.", level = "INFO", app_config = app_config)
+    }, error = function(e) {
+      log_message(paste0("WARNING: Posterior normalization failed: ", e$message), level = "WARN", app_config = app_config)
+    })
+  } else {
+    log_message("Skipping posterior normalization: fitted_model is NULL or not a bsvars object.", level = "WARN", app_config = app_config)
+  }
 
   diag_dir <- "output/rsbvar_diagnostics"
   if (!dir.exists(diag_dir)) {
@@ -165,7 +196,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   # Normalization for MSH models is more complex and depends on identifying restrictions.
   # The default identification might not be sufficient. For now, we skip explicit normalization
   # as the main issue is convergence. A robust identification strategy is a separate, complex task.
-  log_message("Skipping posterior normalization for MSH model as it requires specific identification.", level = "DEBUG", app_config = app_config)
+
   
   log_message("fit_rsbvar_model finished successfully.", level = "DEBUG", app_config = app_config)
   return(list(fitted_model = fitted_model, spec = spec))
@@ -245,7 +276,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   dcc_spec <- rmgarch::dccspec(
     uspec = multi_uspec,
     dccOrder = c(1, 1),
-    distribution = "mvnorm" # FIX: Use 'mvnorm' for robustness, as 'mvt' can be hard to fit
+    distribution = "mvt" # Aligned with multivariate Student-t Copula methodology
   )
   saveRDS(dcc_spec, file.path(diag_dir, paste0("dcc_spec_", timestamp, ".rds")))
 

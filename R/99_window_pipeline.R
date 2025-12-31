@@ -140,9 +140,9 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
     }
   )
 # browser()
-  # If simulated_scenarios is NULL or malformed, ensure a valid placeholder
+  # If simulated_scenarios is NULL or malformed, ensure a valid fallback
   if (is.null(simulated_scenarios) || is.null(simulated_scenarios$asset_scenarios)) {
-    message("Simulated scenarios missing or malformed; creating placeholder zero-return scenarios.")
+    message("Simulated scenarios missing or malformed; creating fallback zero-return scenarios.")
     simulated_scenarios <- list(macro_scenarios = NULL, asset_scenarios = array(0, dim = c(app_config$default$n_simulations, app_config$default$horizon_months, ncol(asset_returns)), dimnames = list(NULL, NULL, colnames(asset_returns))))
   }
 

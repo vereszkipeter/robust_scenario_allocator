@@ -23,8 +23,8 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   
   # Simplified and robust seed handling.
   final_seed <- get_valid_seed(app_config)
-  set.seed(final_seed)
-  log_message(paste("Using validated seed for scenario generation:", final_seed), level = "DEBUG", app_config = app_config)
+  # Global set.seed() removed from here. It will be applied just before dccsim.
+  log_message(paste("Obtained validated seed for scenario generation:", final_seed), level = "DEBUG", app_config = app_config)
   
   rsbvar_fitted_model <- fitted_generative_model$rsbvar_fitted_model
   rsbvar_spec <- fitted_generative_model$rsbvar_spec
@@ -84,6 +84,10 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     
   n_assets <- ncol(dcc_garch_model@model$modeldata$data)
   asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
+
+  # Set seed directly before dccsim call for robustness
+  set.seed(final_seed)
+  log_message(paste("Applying seed", final_seed, "directly before dccsim call."), level = "DEBUG", app_config = app_config)
 
   sim_all <- tryCatch({
     rmgarch::dccsim(

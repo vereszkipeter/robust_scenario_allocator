@@ -65,7 +65,7 @@ plot_fan_chart <- function(base_strategy_pnl_on_scenarios, optimal_weights, scen
   p <- ggplot(fan_data, aes(x = Time)) +
     geom_ribbon(aes(ymin = q05, ymax = q95), fill = "blue", alpha = 0.2) +
     geom_ribbon(aes(ymin = q25, ymax = q75), fill = "blue", alpha = 0.4) +
-    geom_line(aes(y = q50), color = "darkblue", size = 1) +
+    geom_line(aes(y = q50), color = "darkblue", linewidth = 1) +
     labs(
       title = "Fan Chart of Final RSA Portfolio Cumulative P&L",
       y = "Cumulative P&L (Starting at 1)",

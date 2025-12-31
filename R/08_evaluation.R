@@ -326,7 +326,7 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
       }
       p <- ggplot() +
         geom_histogram(data = terminal_returns, aes(x = .data[[asset_name]], y = after_stat(density)), bins = 50, fill = "lightblue", alpha = 0.7) +
-        geom_density(data = as.data.frame(historical_returns), aes(x = .data[[asset_name]]), color = "red", size = 1) +
+        geom_density(data = as.data.frame(historical_returns), aes(x = .data[[asset_name]]), color = "red", linewidth = 1) +
         labs(
           title = paste("Distribution of Terminal vs. Historical Asset Returns for", asset_name),
           subtitle = "Blue: Simulated (at horizon), Red: Historical",
@@ -400,7 +400,7 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
       }
       p <- ggplot() +
         geom_histogram(data = terminal_macro_values, aes(x = .data[[macro_name]], y = after_stat(density)), bins = 50, fill = "lightcoral", alpha = 0.7) +
-        geom_density(data = as.data.frame(historical_macro_data), aes(x = .data[[macro_name]]), color = "darkred", size = 1) +
+        geom_density(data = as.data.frame(historical_macro_data), aes(x = .data[[macro_name]]), color = "darkred", linewidth = 1) +
         labs(
           title = paste("Distribution of Terminal vs. Historical Macro Variable for", macro_name),
           subtitle = "Red: Simulated (at horizon), Dark Red: Historical",
