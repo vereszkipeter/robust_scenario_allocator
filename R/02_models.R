@@ -83,20 +83,21 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   # lambda: overall tightness (smaller = tighter). Default is 0.2.
   # delta: cross-variable shrinkage (smaller = tighter, pushes to diagonal VAR).
   # psi: prior on the inverse of the error covariance matrix.
-  prior_spec <- bsvars::specify_priors(
-    lambda = bsvars::specify_lambda(scale = 0.05, shape = 0.05), # Much tighter than default
-    delta = bsvars::specify_delta(mode = 0.05, sd = 0.1),   # Stronger push towards diagonal VAR
-    psi = bsvars::specify_psi_inv(scale = 1e-4, shape = 1)   # Informative prior on error covariance
-  )
+          # --- Define Even Tighter Priors to Maximize Convergence ---
+          # Set custom priors directly on the 'spec' object
+          spec$specify_prior(
+            lambda = bsvars::specify_lambda(scale = 0.05, shape = 0.05),
+            delta = bsvars::specify_delta(mode = 0.05, sd = 0.1),
+            psi = bsvars::specify_psi_inv(scale = 1e-4, shape = 1)
+          )
+          log_message("bsvars custom priors set on spec object.", level = "DEBUG", app_config = app_config)
   
   log_message(paste0("Starting burn-in for bsvars model with S=", n_burnin_mcmc, "."), level = "DEBUG", app_config = app_config)
   burn_in_model <- tryCatch({
     bsvars::estimate(
       spec,
       S = n_burnin_mcmc,
-      thin = 1,
-      prior = prior_spec, # Pass the tighter priors
-      show_progress = FALSE
+                thin = 1,      show_progress = FALSE
     )
   }, error = function(e) {
     log_message(paste0("ERROR: bsvars burn-in estimate failed: ", e$message), level = "ERROR", app_config = app_config)
@@ -305,5 +306,11 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   })
 
+  if (inherits(dcc_fit_model, "uGARCHmultifit")) {
+    log_message("WARNING: dccfit returned a uGARCHmultifit object, indicating univariate failures. Returning fallback.", level = "WARN", app_config = app_config)
+    emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(asset_returns, na.rm = TRUE) else numeric(0)
+    emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  }
   return(dcc_fit_model)
 }

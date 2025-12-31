@@ -86,7 +86,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
 
   # Set seed directly before dccsim call for robustness
-  set.seed(final_seed)
+  set.seed(abs(final_seed))
   log_message(paste("Applying seed", final_seed, "directly before dccsim call."), level = "DEBUG", app_config = app_config)
 
   sim_all <- tryCatch({

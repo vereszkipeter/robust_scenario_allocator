@@ -45,7 +45,7 @@ default:
     confidence_level: 0.95 # Confidence level for Probabilistic Sharpe Ratio and Deflated Sharpe Ratio
     transaction_cost_flat_rate: 0.001 # Flat rate transaction cost applied at rebalancing
     ep_return_tolerance: 0.001 # Tolerance for implied equilibrium returns view in Entropy Pooling
-    dcc_solver: "nlminb" # Solver for DCC-GARCH model (e.g., "solnp", "nlminb", "lbfgs", "gosolnp")
+    dcc_solver: "gosolnp" # Solver for DCC-GARCH model (e.g., "solnp", "nlminb", "lbfgs", "gosolnp")
     dcc_solver_control: {trace: 1} # Solver control options (e.g., {trace: 0} for solnp)
   log_level: "DEBUG" # Logging level: DEBUG, INFO, WARN, ERROR
     # Add other model parameters here as needed
