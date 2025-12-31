@@ -101,8 +101,15 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     )
   }, error = function(e) {
     log_message(paste0("ERROR: bsvars burn-in estimate failed: ", e$message), level = "ERROR", app_config = app_config)
-    stop(paste("bsvars burn-in estimate failed:", e$message))
+    return(NULL) # Return NULL on error so the check below can catch it
   })
+
+  # Explicit check for burn_in_model validity
+  if (is.null(burn_in_model) || !inherits(burn_in_model, "bsvar")) {
+    log_message("ERROR: burn_in_model is NULL or not a valid 'bsvar' object after burn-in. Aborting RS-BVAR fitting.", level = "ERROR", app_config = app_config)
+    return(list(fitted_model = NULL, spec = spec))
+  }
+
   log_message(paste0("Burn-in complete. Continuing estimation for bsvars model with total S=", n_iter_mcmc, "."), level = "DEBUG", app_config = app_config)
   
   fitted_model <- tryCatch({
@@ -299,7 +306,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
       dcc_spec,
       data = asset_returns,
       solver = "gosolnp", # Explicitly set solver as requested
-      solver.control = app_config$default$models$dcc_solver_control
+      solver.control = list(trace = 0, eval.se = FALSE)
     )
   }, error = function(e) {
     log_message(paste0("DCC fit failed with error: '", e$message, "'. Returning fallback with empirical moments."), level = "ERROR", app_config = app_config)

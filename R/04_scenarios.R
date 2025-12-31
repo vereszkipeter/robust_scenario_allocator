@@ -104,8 +104,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
       fitORspec = dcc_garch_model,
       n.sim = horizon,
       m.sim = n_sim,
-      startMethod = "unconditional",
-      rseed = clean_seed # Pass the clean seed directly
+      startMethod = "unconditional"
     )
   }, error = function(e) {
     stop(paste("generate_full_scenarios failed during dccsim execution:", e$message))
@@ -115,34 +114,34 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     stop("dccsim returned a NULL or incomplete object.")
   }
 
-  # --- FIX: Robust reshaping of simulation output ---
-  sim_list <- sim_all@msim$simX
+  # --- FIX: Refactored extraction and reshaping of simulation output to 3D array ---
+  # Extract simulated data (usually standardized residuals * conditional standard deviations)
+  # 'fitted' method extracts the simulated series directly for DCCsim objects
+  sim_data <- fitted(sim_all)
   
-  if (is.list(sim_list)) {
-      # It's a list of matrices, bind them into a 3D array.
-      # Expected dimensions of each matrix from dccsim are horizon x n_assets
-      # Resulting temp_array dimension will be: horizon x n_assets x n_sim
-      temp_array <- abind::abind(sim_list, along = 3)
-  } else if (is.array(sim_list) && length(dim(sim_list)) == 3) {
-      # If dccsim directly returns a 3D array (e.g., if m.sim = 1), assign it.
-      # The order might be horizon x n_assets x n_sim or n_sim x horizon x n_assets.
-      # We will handle the permutation below.
-      temp_array <- sim_list
-  } else {
-      stop("Unexpected data structure for dccsim output (simX). Expected a list of matrices or a 3D array.")
+  # Ensure the extracted data is numeric and not an unexpected list or other structure.
+  if (!is.numeric(sim_data)) {
+      stop("fitted(sim_all) did not return a numeric vector/matrix as expected.")
   }
 
-  # Permute the array to the standard dimension order: n_sim x horizon x n_assets
-  # The 'temp_array' from abind (or direct dccsim output) is typically horizon x n_assets x n_sim.
-  # We need to reorder it to n_sim x horizon x n_assets.
-  asset_sims_transformed <- aperm(temp_array, c(3, 1, 2))
+  # Reshape into a 3D array: horizon x n_assets x n_sim
+  # The 'array' function fills column-wise by default, so we need to be careful with order.
+  # If 'sim_data' is already in a 2D matrix (e.g., from fitted()), it's usually horizon * n_sim by n_assets
+  # or horizon by (n_assets * n_sim)
   
-  # Verify dimensions after permutation
-  if (any(dim(asset_sims_transformed) != c(n_sim, horizon, n_assets))) {
-    stop(paste0("Dimension mismatch after permuting dccsim output. Expected dims (", 
-                n_sim, ",", horizon, ",", n_assets, ") but got (", 
-                paste(dim(asset_sims_transformed), collapse = ","), ")"))
+  # A robust way to fill the 3D array is to ensure 'sim_data' is a vector first
+  # and then reshape it explicitly.
+  scenarios_3d <- array(as.numeric(sim_data), dim = c(horizon, n_assets, n_sim))
+
+  # Verify dimensions after reshaping
+  if (any(dim(scenarios_3d) != c(horizon, n_assets, n_sim))) {
+    stop(paste0("Dimension mismatch after reshaping dccsim output. Expected dims (", 
+                horizon, ",", n_assets, ",", n_sim, ") but got (", 
+                paste(dim(scenarios_3d), collapse = ","), ")"))
   }
+  
+  # Assign the correctly dimensioned array
+  asset_sims_transformed <- scenarios_3d
   # --- End FIX ---
   
   dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names)
