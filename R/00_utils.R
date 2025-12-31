@@ -34,6 +34,14 @@ identity_transform_inverse <- function(x, last_level) {
   return(x)
 }
 
+# Diff function for transformations that do nothing
+diff_transform <- function(x) {
+  return(diff(x))
+}
+
+diff_transform_inverse <- function(x, last_level) {
+  return(cumsum(c(last_level, x)))
+}
 
 # Month-over-month change for inflation-like series (log-difference)
 mom_change <- function(x) {

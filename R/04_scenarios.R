@@ -1,5 +1,4 @@
-library(rugarch)
-library(rmgarch)
+library(tsmarch)
 library(bsvars)
 library(xts)
 library(MASS)
@@ -11,7 +10,7 @@ library(abind) # For combining arrays
 #' by combining simulations from the fitted RS-BVAR and DCC-GARCH models.
 #' @param fitted_generative_model A list containing:
 #'   - `rsbvar_model`: A fitted bvars object for macro variables.
-#'   - `dcc_garch_model`: A fitted DCCfit object for asset returns.
+#'   - `dcc_garch_model`: A fitted tsmarch.estimate object for asset returns.
 #' @param n_sim The number of simulations (scenarios) to generate.
 #' @param horizon The time horizon in months for each scenario.
 #' @param asset_metadata A tibble containing asset information, used to identify macro/asset tickers.
@@ -21,9 +20,7 @@ library(abind) # For combining arrays
 #'   each of dimensions `n_sim x horizon x n_variables`, with values in original levels/returns.
 generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, asset_metadata, last_historical_levels, app_config, seed = NULL) {
   
-  # Simplified and robust seed handling.
   final_seed <- get_valid_seed(app_config)
-  # Global set.seed() removed from here. It will be applied just before dccsim.
   log_message(paste("Obtained validated seed for scenario generation:", final_seed), level = "DEBUG", app_config = app_config)
   
   rsbvar_fitted_model <- fitted_generative_model$rsbvar_fitted_model
@@ -78,75 +75,41 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
 
   # --- 2. Simulate Asset Returns from DCC-GARCH ---
   log_message("Simulating asset scenarios from DCC-GARCH model...", level = "INFO", app_config = app_config)
-  if (is.null(dcc_garch_model) || !inherits(dcc_garch_model, "DCCfit")) {
-    stop("A valid DCC-GARCH model ('DCCfit' object) must be provided.")
+  if (is.null(dcc_garch_model) || !inherits(dcc_garch_model, "tsmarch.estimate")) {
+    stop("A valid DCC-GARCH model ('tsmarch.estimate' object) must be provided.")
   }
     
-  n_assets <- ncol(dcc_garch_model@model$modeldata$data)
-  asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
+  n_assets <- ncol(dcc_garch_model$spec$spec$data)
+  asset_var_names <- colnames(dcc_garch_model$spec$spec$data)
 
-  # Simplified and robust seed handling.
   final_seed <- get_valid_seed(app_config)
-  # Global set.seed() removed from here. It will be applied just before dccsim.
   log_message(paste("Obtained validated seed for scenario generation:", final_seed), level = "DEBUG", app_config = app_config)
   
-  # Refactor seed handling: ensure clean_seed is a positive 32-bit integer.
-  # The 'seed' argument to the function 'generate_full_scenarios' is not used, 
-  # so we will use final_seed, which comes from get_valid_seed(app_config).
   clean_seed <- as.integer(abs(as.numeric(final_seed)) %% .Machine$integer.max)
-      
-  # Set seed directly before dccsim call for robustness
-  set.seed(clean_seed)
-  log_message(paste("Applying clean seed", clean_seed, "directly before dccsim call."), level = "DEBUG", app_config = app_config)
-
+  
+  log_message(paste("Applying clean seed", clean_seed, "directly before predict call."), level = "DEBUG", app_config = app_config)
+  
   sim_all <- tryCatch({
-    rmgarch::dccsim(
-      fitORspec = dcc_garch_model,
-      n.sim = horizon,
-      m.sim = n_sim,
-      startMethod = "unconditional"
+    predict(
+      object = dcc_garch_model,
+      nsim = n_sim,
+      h = horizon,
+      seed = clean_seed
     )
   }, error = function(e) {
-    stop(paste("generate_full_scenarios failed during dccsim execution:", e$message))
+    stop(paste("generate_full_scenarios failed during tsmarch::predict execution:", e$message))
   })
 
-  if (is.null(sim_all) || is.null(sim_all@msim$simX)) {
-    stop("dccsim returned a NULL or incomplete object.")
+  if (is.null(sim_all) || length(sim_all) == 0) {
+    stop("tsmarch::predict returned a NULL or empty object.")
   }
 
-  # --- FIX: Refactored extraction and reshaping of simulation output to 3D array ---
-  # Extract simulated data (usually standardized residuals * conditional standard deviations)
-  # 'fitted' method extracts the simulated series directly for DCCsim objects
-  sim_data <- fitted(sim_all)
-  
-  # Ensure the extracted data is numeric and not an unexpected list or other structure.
-  if (!is.numeric(sim_data)) {
-      stop("fitted(sim_all) did not return a numeric vector/matrix as expected.")
-  }
-
-  # Reshape into a 3D array: horizon x n_assets x n_sim
-  # The 'array' function fills column-wise by default, so we need to be careful with order.
-  # If 'sim_data' is already in a 2D matrix (e.g., from fitted()), it's usually horizon * n_sim by n_assets
-  # or horizon by (n_assets * n_sim)
-  
-  # A robust way to fill the 3D array is to ensure 'sim_data' is a vector first
-  # and then reshape it explicitly.
-  scenarios_3d <- array(as.numeric(sim_data), dim = c(horizon, n_assets, n_sim))
-
-  # Verify dimensions after reshaping
-  if (any(dim(scenarios_3d) != c(horizon, n_assets, n_sim))) {
-    stop(paste0("Dimension mismatch after reshaping dccsim output. Expected dims (", 
-                horizon, ",", n_assets, ",", n_sim, ") but got (", 
-                paste(dim(scenarios_3d), collapse = ","), ")"))
-  }
-  
-  # Assign the correctly dimensioned array
-  asset_sims_transformed <- scenarios_3d
-  # --- End FIX ---
+  # The output of tsmarch::predict is a list with element 'series' being a 3D array
+  # of dimensions n_sim x horizon x n_assets
+  asset_sims_transformed <- sim_all$series
   
   dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names)
   
-  # Scale simulated asset returns back down (they were scaled up by 100 for fitting)
   log_message("Scaling simulated asset returns back down by 100.", level = "DEBUG", app_config = app_config)
   asset_scenarios_array <- asset_sims_transformed / 100
 

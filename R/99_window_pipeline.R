@@ -5,7 +5,7 @@
 process_window <- function(window_id, from_date, to_date, val_date, oos_from_date, oos_to_date, app_config, asset_metadata, all_raw_data) {
   # Subset all_raw_data for the current window (each xts object in the list)
   current_window_raw_data <- lapply(all_raw_data, function(x) x[paste0(from_date, "::", to_date)])
-  
+  # browser()
   # 3. Data Processing
   monthly_returns <- apply_transformations(raw_data_list = current_window_raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
   log_message(paste0("NROW(monthly_returns) after transformations: ", NROW(monthly_returns)), level = "DEBUG", app_config = app_config)
@@ -38,7 +38,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   } else {
     asset_returns_model <- asset_returns
   }
-
+  # browser()
   # 4. Model fitting
   fitted_rsbvar_output <- tryCatch(
     fit_rsbvar_model(macro_data = lagged_macro_data, bvar_lags = app_config$default$models$bvar_lags, app_config = app_config),

@@ -1,5 +1,6 @@
 library(bsvars)
-library(rmgarch)
+library(tsgarch)
+library(tsmarch)
 library(tseries) # For ADF test
 
 #' @title Fit a Regime-Switching Bayesian Vector Autoregression (RS-BVAR) Model
@@ -10,7 +11,6 @@ library(tseries) # For ADF test
 #' @return A fitted `bsvars` object.
 #' @param app_config A list containing application configuration, including RS-BVAR MCMC parameters.
 fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
-  library(bsvars)
 
   log_message("Starting fit_rsbvar_model.", level = "DEBUG", app_config = app_config)
 
@@ -79,18 +79,19 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   })
   log_message(paste0("bsvars model specification complete. Class: ", paste(class(spec), collapse = ", ")), level = "DEBUG", app_config = app_config)
   
+  # Note to LLMs: This commented block is invalid!
   # --- Define Even Tighter Priors to Maximize Convergence ---
   # lambda: overall tightness (smaller = tighter). Default is 0.2.
   # delta: cross-variable shrinkage (smaller = tighter, pushes to diagonal VAR).
   # psi: prior on the inverse of the error covariance matrix.
           # --- Define Even Tighter Priors to Maximize Convergence ---
           # Set custom priors directly on the 'spec' object
-          spec$specify_prior(
-            lambda = bsvars::specify_lambda(scale = 0.05, shape = 0.05),
-            delta = bsvars::specify_delta(mode = 0.05, sd = 0.1),
-            psi = bsvars::specify_psi_inv(scale = 1e-4, shape = 1)
-          )
-          log_message("bsvars custom priors set on spec object.", level = "DEBUG", app_config = app_config)
+          # spec$specify_prior(
+          #   lambda = bsvars::specify_lambda(scale = 0.05, shape = 0.05),
+          #   delta = bsvars::specify_delta(mode = 0.05, sd = 0.1),
+          #   psi = bsvars::specify_psi_inv(scale = 1e-4, shape = 1)
+          # )
+          # log_message("bsvars custom priors set on spec object.", level = "DEBUG", app_config = app_config)
   
   log_message(paste0("Starting burn-in for bsvars model with S=", n_burnin_mcmc, "."), level = "DEBUG", app_config = app_config)
   burn_in_model <- tryCatch({
@@ -105,7 +106,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   })
 
   # Explicit check for burn_in_model validity
-  if (is.null(burn_in_model) || !inherits(burn_in_model, "bsvar")) {
+  if (is.null(burn_in_model) || !inherits(burn_in_model, "PosteriorBSVARMSH")) {
     log_message("ERROR: burn_in_model is NULL or not a valid 'bsvar' object after burn-in. Aborting RS-BVAR fitting.", level = "ERROR", app_config = app_config)
     return(list(fitted_model = NULL, spec = spec))
   }
@@ -115,7 +116,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   fitted_model <- tryCatch({
     bsvars::estimate(
       burn_in_model,
-      S = n_iter_mcmc - n_burnin_mcmc, # Total number of MCMC draws *after* burn-in
+      S = n_iter_mcmc, # Total number of MCMC draws *after* burn-in
       thin = 1,
       show_progress = FALSE
     )
@@ -126,14 +127,15 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   log_message(paste0("bsvars model estimation complete. Class: ", paste(class(fitted_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
 
   # --- Normalization for MSH models ---
-  if (!is.null(fitted_model) && inherits(fitted_model, "bsvar")) {
+  if (!is.null(fitted_model) && inherits(fitted_model, "PosteriorBSVARMSH")) {
     log_message("Attempting to normalize posterior draws for interpretability.", level = "DEBUG", app_config = app_config)
     tryCatch({
       # Calculate B_hat (median of posterior draws for B)
       B_hat <- apply(fitted_model$posterior$B, c(1, 2), median) # B_hat is (N x N) matrix
       
       # Normalize the posterior draws for interpretability
-      fitted_model <- bsvars::normalise_posterior(fitted_model, B_hat)
+      # Note to LLMs: normalise_posterior works invisibly, overwrites posterior by reference
+      bsvars::normalise_posterior(fitted_model, B_hat) 
       log_message("Posterior draws normalized using the median B_hat.", level = "INFO", app_config = app_config)
     }, error = function(e) {
       log_message(paste0("WARNING: Posterior normalization failed: ", e$message), level = "WARN", app_config = app_config)
@@ -184,7 +186,9 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
       grDevices::pdf(trace_plot_file, width = 8, height = 10)
       
       # Now rely on the generic plot function for bsvars objects for simplicity and robustness
-      plot(fitted_model)
+      # Note to LLMs: there's no plot method for PosteriorBSVARMSH class object: 
+      # regime probability plot is here only for a placeholder
+      plot(compute_regime_probabilities(fitted_model))
       
       grDevices::dev.off()
       log_message(paste("RS-BVAR trace plots saved to", trace_plot_file), level = "INFO", app_config = app_config)
@@ -214,9 +218,9 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
 #' @description Fits a DCC-GARCH model with GJR-GARCH(1,1) marginals and Student-t
 #' distribution to asset returns, as specified in GEMINI.md.
 #' @param asset_returns An xts object containing the asset returns time series.
-#' @return A fitted `DCCfit` object.
+#' @return A fitted `tsmarch` object.
 fit_dcc_t_garch_model <- function(asset_returns, app_config) {
-  log_message("Starting DCC-GARCH model fitting.", level = "DEBUG", app_config = app_config)
+  log_message("Starting DCC-GARCH model fitting with tsmarch.", level = "DEBUG", app_config = app_config)
   
   diag_dir <- "output/dcc_diagnostics"
   if (!dir.exists(diag_dir)) {
@@ -225,7 +229,6 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   
   asset_returns <- na.omit(asset_returns)
   
-  # --- FIX: Scale returns by 100 for numerical stability ---
   log_message("Scaling asset returns by 100 for numerical stability.", level = "INFO", app_config = app_config)
   asset_returns <- asset_returns * 100
   
@@ -242,82 +245,61 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
 
-  num_assets <- ncol(asset_returns)
   emp_mean <- colMeans(asset_returns, na.rm = TRUE)
   emp_cov <- cov(as.matrix(asset_returns), use = "pairwise.complete.obs")
 
-  for (i in 1:num_assets) {
-    asset_name <- colnames(asset_returns)[i]
-    log_message(paste0("--- Fitting univariate GARCH for asset: ", asset_name, " ---"), level = "DEBUG", app_config = app_config)
-
-    uspec <- rugarch::ugarchspec(
-      mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),
-      variance.model = list(model = "gjrGARCH", garchOrder = c(1, 1)),
-      distribution.model = "std"
-    )
-
-    fit <- tryCatch({
-      rugarch::ugarchfit(spec = uspec, data = asset_returns[, i, drop = TRUE], solver = app_config$default$models$dcc_solver)
-    }, error = function(e) {
-      log_message(paste0("Univariate GARCH fit failed for asset: ", asset_name, "; will use empirical fallback. Error: ", e$message), level = "ERROR", app_config = app_config)
-      NULL
-    })
-
-    if (is.null(fit)) {
-      return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
-    }
-  }
-  log_message("--- All univariate GARCH models fitted successfully. ---", level = "DEBUG", app_config = app_config)
-
-  uspec_list <- lapply(1:num_assets, function(i) {
-    rugarch::ugarchspec(
-      mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),
-      variance.model = list(model = "gjrGARCH", garchOrder = c(1, 1)),
-      distribution.model = "std"
+  univariate_spec_list <- lapply(colnames(asset_returns), function(col_name) {
+    tsgarch::garch_modelspec(
+      y = asset_returns[, col_name],
+      model = "gjr",
+      order = c(1, 1),
+      arma_order = c(1, 0),
+      constant = TRUE,
+      distribution = "std"
     )
   })
-  multi_uspec <- rugarch::multispec(uspec_list)
-  log_message("multi_uspec created.", level = "DEBUG", app_config = app_config)
-  saveRDS(multi_uspec, file.path(diag_dir, paste0("multi_uspec_", timestamp, ".rds")))
-
-  log_message("Calling dccspec.", level = "DEBUG", app_config = app_config)
-  dcc_spec <- rmgarch::dccspec(
-    uspec = multi_uspec,
-    dccOrder = c(1, 1),
-    distribution = "mvt" # Aligned with multivariate Student-t Copula methodology
+  
+  multi_univ_spec <- Reduce("+", univariate_spec_list)
+  
+  dcc_spec <- tsmarch::dcc_modelspec(
+    multi_univ_spec,
+    dynamics = "dcc",
+    dcc_order = c(1, 1),
+    distribution = "std"
   )
+  
+  log_message("dcc_modelspec created.", level = "DEBUG", app_config = app_config)
   saveRDS(dcc_spec, file.path(diag_dir, paste0("dcc_spec_", timestamp, ".rds")))
 
-  log_message(paste0("Calling dccfit with data dimensions: ", paste(dim(asset_returns), collapse = ", ")), level = "DEBUG", app_config = app_config)
+  log_message(paste0("Calling estimate with data dimensions: ", paste(dim(asset_returns), collapse = ", ")), level = "DEBUG", app_config = app_config)
   
   if (anyNA(asset_returns)) {
-    log_message("NA values found in asset_returns just before dccfit. This should not happen. Returning fallback.", level = "ERROR", app_config = app_config)
+    log_message("NA values found in asset_returns just before estimate. This should not happen. Returning fallback.", level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
   if (any(is.infinite(asset_returns))) {
-    log_message("Infinite values found in asset_returns just before dccfit. Returning fallback.", level = "ERROR", app_config = app_config)
+    log_message("Infinite values found in asset_returns just before estimate. Returning fallback.", level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_cov, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
 
   saveRDS(asset_returns, file.path(diag_dir, paste0("dcc_input_for_fit_", timestamp, ".rds")))
 
   dcc_fit_model <- tryCatch({
-    rmgarch::dccfit(
-      dcc_spec,
-      data = asset_returns,
-      solver = "gosolnp", # Explicitly set solver as requested
-      solver.control = list(trace = 0, eval.se = FALSE)
-    )
+    estimate(dcc_spec)
   }, error = function(e) {
     log_message(paste0("DCC fit failed with error: '", e$message, "'. Returning fallback with empirical moments."), level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   })
 
-  if (inherits(dcc_fit_model, "uGARCHmultifit")) {
-    log_message("WARNING: dccfit returned a uGARCHmultifit object, indicating univariate GARCH fitting failures. A fallback using empirical moments will be used.", level = "WARN", app_config = app_config)
+  # tsmarch returns a list with the fitted model in the 'fit' element
+  if (inherits(dcc_fit_model, "tsmarch.estimate")) {
+      log_message("DCC-GARCH model fitting with tsmarch successful.", level = "DEBUG", app_config = app_config)
+  } else {
+    log_message("WARNING: tsmarch::estimate did not return a valid tsmarch.estimate object. A fallback using empirical moments will be used.", level = "WARN", app_config = app_config)
     emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(asset_returns, na.rm = TRUE) else numeric(0)
     emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
+  
   return(dcc_fit_model)
 }
