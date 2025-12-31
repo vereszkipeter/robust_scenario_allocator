@@ -15,11 +15,22 @@ library(dplyr) # For data manipulation
 #' @return A named numeric vector of optimal meta-weights for the base strategies.
 perform_distributionally_robust_optimization <- function(base_strategy_pnl_on_scenarios, scenario_probabilities, app_config) {
   
+  # --- Handle NULL or empty input scenarios ---
+  if (is.null(base_strategy_pnl_on_scenarios) || !is.array(base_strategy_pnl_on_scenarios) || length(dim(base_strategy_pnl_on_scenarios)) < 3 || dim(base_strategy_pnl_on_scenarios)[3] == 0) {
+    log_message("base_strategy_pnl_on_scenarios is NULL or empty/malformed. Skipping DRO and returning NULL.", level = "WARN", app_config = app_config)
+    return(NULL)
+  }
+
   # Extract relevant dimensions and parameters
   horizon <- dim(base_strategy_pnl_on_scenarios)[1] - 1
   n_strategies <- dim(base_strategy_pnl_on_scenarios)[2]
   n_sim <- dim(base_strategy_pnl_on_scenarios)[3]
   strategy_names <- dimnames(base_strategy_pnl_on_scenarios)[[2]]
+  
+  if (n_strategies == 0 || n_sim == 0) {
+    log_message("No strategies or simulations available in base_strategy_pnl_on_scenarios. Skipping DRO and returning NULL.", level = "WARN", app_config = app_config)
+    return(NULL)
+  }
   
   dro_epsilon <- app_config$default$models$dro_epsilon
   entropy_penalty_kappa <- app_config$default$models$entropy_penalty_kappa

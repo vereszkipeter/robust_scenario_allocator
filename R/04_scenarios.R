@@ -109,30 +109,28 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   
   if (is.list(sim_list)) {
       # It's a list of matrices, bind them into a 3D array.
-      # Expected dimensions of each matrix: horizon x n_assets
-      # Resulting array dimension: horizon x n_assets x n_sim
+      # Expected dimensions of each matrix from dccsim are horizon x n_assets
+      # Resulting temp_array dimension will be: horizon x n_assets x n_sim
       temp_array <- abind::abind(sim_list, along = 3)
   } else if (is.array(sim_list) && length(dim(sim_list)) == 3) {
-      # It's already a 3D array, just assign it.
-      # dccsim can sometimes return horizon x n_sim x n_assets
+      # If dccsim directly returns a 3D array (e.g., if m.sim = 1), assign it.
+      # The order might be horizon x n_assets x n_sim or n_sim x horizon x n_assets.
+      # We will handle the permutation below.
       temp_array <- sim_list
   } else {
       stop("Unexpected data structure for dccsim output (simX). Expected a list of matrices or a 3D array.")
   }
 
   # Permute the array to the standard dimension order: n_sim x horizon x n_assets
-  # The original temp_array is likely [horizon, n_assets, n_sim] or a permutation thereof.
-  # The target is [n_sim, horizon, n_assets]
-  expected_dims <- c(n_sim, horizon, n_assets)
-  current_dims <- dim(temp_array)
+  # The 'temp_array' from abind (or direct dccsim output) is typically horizon x n_assets x n_sim.
+  # We need to reorder it to n_sim x horizon x n_assets.
+  asset_sims_transformed <- aperm(temp_array, c(3, 1, 2))
   
-  if (setequal(current_dims, expected_dims)) {
-      perm_map <- match(expected_dims, current_dims)
-      asset_sims_transformed <- aperm(temp_array, perm_map)
-  } else {
-      stop(paste0("Dimension mismatch in dccsim output. Expected dims containing ", 
-                  paste(expected_dims, collapse = ","), " but got ", 
-                  paste(current_dims, collapse = ",")))
+  # Verify dimensions after permutation
+  if (any(dim(asset_sims_transformed) != c(n_sim, horizon, n_assets))) {
+    stop(paste0("Dimension mismatch after permuting dccsim output. Expected dims (", 
+                n_sim, ",", horizon, ",", n_assets, ") but got (", 
+                paste(dim(asset_sims_transformed), collapse = ","), ")"))
   }
   # --- End FIX ---
   
