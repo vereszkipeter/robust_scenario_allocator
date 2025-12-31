@@ -108,7 +108,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   fitted_model <- tryCatch({
     bsvars::estimate(
       burn_in_model,
-      S = n_iter_mcmc, # Total number of MCMC draws, including burn-in
+      S = n_iter_mcmc - n_burnin_mcmc, # Total number of MCMC draws *after* burn-in
       thin = 1,
       show_progress = FALSE
     )
@@ -289,7 +289,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   }
   if (any(is.infinite(asset_returns))) {
     log_message("Infinite values found in asset_returns just before dccfit. Returning fallback.", level = "ERROR", app_config = app_config)
-    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+    return(list(fallback = TRUE, emp_mean = emp_cov, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   }
 
   saveRDS(asset_returns, file.path(diag_dir, paste0("dcc_input_for_fit_", timestamp, ".rds")))
@@ -298,16 +298,16 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
     rmgarch::dccfit(
       dcc_spec,
       data = asset_returns,
-      solver = app_config$default$models$dcc_solver,
+      solver = "gosolnp", # Explicitly set solver as requested
       solver.control = app_config$default$models$dcc_solver_control
     )
   }, error = function(e) {
-    log_message(paste0("DCC fit failed with error: ", e$message), level = "ERROR", app_config = app_config)
+    log_message(paste0("DCC fit failed with error: '", e$message, "'. Returning fallback with empirical moments."), level = "ERROR", app_config = app_config)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
   })
 
   if (inherits(dcc_fit_model, "uGARCHmultifit")) {
-    log_message("WARNING: dccfit returned a uGARCHmultifit object, indicating univariate failures. Returning fallback.", level = "WARN", app_config = app_config)
+    log_message("WARNING: dccfit returned a uGARCHmultifit object, indicating univariate GARCH fitting failures. A fallback using empirical moments will be used.", level = "WARN", app_config = app_config)
     emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(asset_returns, na.rm = TRUE) else numeric(0)
     emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))

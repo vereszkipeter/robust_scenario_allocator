@@ -85,16 +85,27 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   n_assets <- ncol(dcc_garch_model@model$modeldata$data)
   asset_var_names <- colnames(dcc_garch_model@model$modeldata$data)
 
+  # Simplified and robust seed handling.
+  final_seed <- get_valid_seed(app_config)
+  # Global set.seed() removed from here. It will be applied just before dccsim.
+  log_message(paste("Obtained validated seed for scenario generation:", final_seed), level = "DEBUG", app_config = app_config)
+  
+  # Refactor seed handling: ensure clean_seed is a positive 32-bit integer.
+  # The 'seed' argument to the function 'generate_full_scenarios' is not used, 
+  # so we will use final_seed, which comes from get_valid_seed(app_config).
+  clean_seed <- as.integer(abs(as.numeric(final_seed)) %% .Machine$integer.max)
+      
   # Set seed directly before dccsim call for robustness
-  set.seed(abs(final_seed))
-  log_message(paste("Applying seed", final_seed, "directly before dccsim call."), level = "DEBUG", app_config = app_config)
+  set.seed(clean_seed)
+  log_message(paste("Applying clean seed", clean_seed, "directly before dccsim call."), level = "DEBUG", app_config = app_config)
 
   sim_all <- tryCatch({
     rmgarch::dccsim(
       fitORspec = dcc_garch_model,
       n.sim = horizon,
       m.sim = n_sim,
-      startMethod = "unconditional"
+      startMethod = "unconditional",
+      rseed = clean_seed # Pass the clean seed directly
     )
   }, error = function(e) {
     stop(paste("generate_full_scenarios failed during dccsim execution:", e$message))
