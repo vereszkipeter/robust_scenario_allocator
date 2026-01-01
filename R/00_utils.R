@@ -3,7 +3,12 @@ library(stats)              # For pnorm, qnorm
 library(xts)                # For xts objects
 
 # Custom simple return function
-simple_return <- function(x) {
+simple_return <- function(x, app_config) {
+  if (NROW(x) < 2) {
+    warning_msg <- paste("Input to simple_return has fewer than 2 rows (", NROW(x), "). Returning NA-filled xts.")
+    log_message(warning_msg, level = "WARN", app_config = app_config)
+    return(xts(rep(NA_real_, NROW(x)), order.by = index(x), dimnames = dimnames(x)))
+  }
   x / stats::lag(x) - 1
 }
 
@@ -30,7 +35,7 @@ undo_simple_return <- function(x, last_level) {
 }
 
 # Identity function for transformations that do nothing
-identity_transform <- function(x) {
+identity_transform <- function(x, app_config) {
   return(x)
 }
 
@@ -39,7 +44,12 @@ identity_transform_inverse <- function(x, last_level) {
 }
 
 # Diff function for transformations that do nothing
-diff_transform <- function(x) {
+diff_transform <- function(x, app_config) {
+  if (NROW(x) < 2) {
+    warning_msg <- paste("Input to diff_transform has fewer than 2 rows (", NROW(x), "). Returning empty xts.")
+    log_message(warning_msg, level = "WARN", app_config = app_config)
+    return(xts(order.by = index(x)[-1])) # Return empty xts, as diff would
+  }
   return(diff(x))
 }
 
@@ -48,7 +58,17 @@ diff_transform_inverse <- function(x, last_level) {
 }
 
 # Month-over-month change for inflation-like series (log-difference)
-mom_change <- function(x) {
+mom_change <- function(x, app_config) {
+  if (NROW(x) < 2) {
+    warning_msg <- paste("Input to mom_change has fewer than 2 rows (", NROW(x), "). Returning empty xts.")
+    log_message(warning_msg, level = "WARN", app_config = app_config)
+    return(xts(order.by = index(x)[-1])) # Return empty xts, as diff would
+  }
+  if (any(x <= 0, na.rm = TRUE)) {
+    warning_msg <- paste("Input to mom_change contains non-positive values. Logarithm will produce NaN. Returning empty xts.")
+    log_message(warning_msg, level = "WARN", app_config = app_config)
+    return(xts(order.by = index(x)[-1]))
+  }
   # For inflation and industrial production, values are typically positive.
   log_x <- log(x)
   diff_log_x <- diff(log_x, lag = 1)

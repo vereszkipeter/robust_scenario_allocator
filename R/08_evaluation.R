@@ -217,7 +217,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
         metrics = metrics
       ))
   }
-}
+
   
   #' @title Compare Simulated and Historical Distributions
   #' @description Calculates mean, standard deviation, and performs a Kolmogorov-Smirnov test

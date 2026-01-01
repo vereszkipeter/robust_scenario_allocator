@@ -128,17 +128,17 @@ list(
     {dir.create("output/plots/global", recursive = TRUE, showWarnings = FALSE); "output/plots/global"},
     format = "file"
   )
-  # ,
-  # 
-  # # Global Validation Report (aggregates results from all windows)
-  # tar_target(
-  #   global_validation_report,
-  #   generate_global_validation_report(
-  #     all_window_results = all_window_results_combined, # Pass the list of results
-  #     app_config = app_config,
-  #     output_report_dir = output_reports_dir,
-  #     output_plots_dir = output_plots_dir_global
-  #   ),
-  #   format = "file"
-  # )
+  ,
+
+  # Global Validation Report (aggregates results from all windows)
+  tar_target(
+    global_validation_report,
+    generate_global_validation_report(
+      all_window_results = all_window_results_combined, # Pass the list of results
+      app_config = app_config,
+      output_report_dir = output_reports_dir,
+      output_plots_dir = output_plots_dir_global
+    ),
+    format = "file"
+  )
 )

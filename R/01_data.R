@@ -224,7 +224,8 @@ apply_transformations <- function(raw_data_list, asset_metadata, window_to_date,
     
     # Apply transformation function to the series from the monthly panel
     transformed_series <- tryCatch({
-      transform_func(series)
+      # Pass app_config to the transform_func
+      transform_func(series, app_config = app_config)
     }, error = function(e) {
       warning("Transformation failed for ticker: ", ticker, ". Error: ", e$message)
       return(xts(order.by = as.Date(character(0)))) # Return empty xts on error
