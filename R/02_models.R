@@ -247,27 +247,54 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
 
   emp_mean <- colMeans(asset_returns, na.rm = TRUE)
   emp_cov <- cov(as.matrix(asset_returns), use = "pairwise.complete.obs")
-
-  univariate_spec_list <- lapply(colnames(asset_returns), function(col_name) {
-    tsgarch::garch_modelspec(
+  
+  # browser()
+  garch_model_list <- lapply(colnames(asset_returns), function(col_name) {
+    spec <- tsgarch::garch_modelspec(
       y = asset_returns[, col_name],
-      model = "gjr",
-      order = c(1, 1),
-      arma_order = c(1, 0),
+      model = "gjrgarch", # Keep this consistent for all assets
       constant = TRUE,
-      distribution = "std"
+      distribution = "norm"
     )
+    
+    # Try standard estimation
+    fit <- tryCatch({
+      tsmethods::estimate(spec, keep_tmb = TRUE, stationarity_constraint = 0.95)
+    }, error = function(e) NULL)
+    
+    # Check for NaNs (using your persistence_summary helper logic)
+    is_failed <- is.null(fit) || any(is.nan(fit$persistence_summary[2])) || any(is.nan(fit$vcoef))
+    
+    if (is_failed) {
+      message(paste("Cleaning Hessian for:", col_name))
+      # RE-FIT with vcov = FALSE. This keeps the GJR structure (5 params)
+      # but prevents the NaNs that crash the DCC and predict()
+      fit <- tsmethods::estimate(spec, keep_tmb = TRUE, 
+                                 stationarity_constraint = 0.95, vcov = FALSE)
+    }
+    return(fit)
   })
   
-  multi_univ_spec <- Reduce("+", univariate_spec_list)
+  garch_model <- to_multi_estimate(garch_model_list)
+  names(garch_model) <- colnames(asset_returns)
   
   dcc_spec <- tsmarch::dcc_modelspec(
-    multi_univ_spec,
+    garch_model,
     dynamics = "dcc",
     dcc_order = c(1, 1),
-    distribution = "std"
+    distribution = "mvt"
   )
   
+  # # 1. Force a minimum alpha_1 (shocks must update correlation)
+  # dcc_spec$parmatrix[parameter == "alpha_1", lower := 0.015]
+  # 
+  # # 2. Cap beta_1 (ensure correlations don't have a unit root)
+  # dcc_spec$parmatrix[parameter == "beta_1", upper := 0.88]
+  # 
+  # # 3. Ensure the shape (degrees of freedom) stays in a stable range
+  # # (mvt with shape near 2.0 causes the Cholesky/predict crash)
+  # dcc_spec$parmatrix[parameter == "shape", lower := 5.0]
+   
   log_message("dcc_modelspec created.", level = "DEBUG", app_config = app_config)
   saveRDS(dcc_spec, file.path(diag_dir, paste0("dcc_spec_", timestamp, ".rds")))
 
@@ -284,15 +311,10 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
 
   saveRDS(asset_returns, file.path(diag_dir, paste0("dcc_input_for_fit_", timestamp, ".rds")))
 
-  dcc_fit_model <- tryCatch({
-    estimate(dcc_spec)
-  }, error = function(e) {
-    log_message(paste0("DCC fit failed with error: '", e$message, "'. Returning fallback with empirical moments."), level = "ERROR", app_config = app_config)
-    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
-  })
+  # browser()
+  dcc_fit_model <- estimate(dcc_spec)
 
-  # tsmarch returns a list with the fitted model in the 'fit' element
-  if (inherits(dcc_fit_model, "tsmarch.estimate")) {
+  if (inherits(dcc_fit_model, "dcc.estimate")) {
       log_message("DCC-GARCH model fitting with tsmarch successful.", level = "DEBUG", app_config = app_config)
   } else {
     log_message("WARNING: tsmarch::estimate did not return a valid tsmarch.estimate object. A fallback using empirical moments will be used.", level = "WARN", app_config = app_config)

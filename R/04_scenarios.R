@@ -72,15 +72,15 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   } else {
     log_message("RS-BVAR model not provided or invalid. Skipping macro scenario simulation.", level = "INFO", app_config = app_config)
   }
-
+  # browser()
   # --- 2. Simulate Asset Returns from DCC-GARCH ---
   log_message("Simulating asset scenarios from DCC-GARCH model...", level = "INFO", app_config = app_config)
-  if (is.null(dcc_garch_model) || !inherits(dcc_garch_model, "tsmarch.estimate")) {
-    stop("A valid DCC-GARCH model ('tsmarch.estimate' object) must be provided.")
+  if (is.null(dcc_garch_model) || !inherits(dcc_garch_model, "dcc.estimate")) {
+    stop("A valid DCC-GARCH model ('dcc.estimate' object) must be provided.")
   }
     
-  n_assets <- ncol(dcc_garch_model$spec$spec$data)
-  asset_var_names <- colnames(dcc_garch_model$spec$spec$data)
+  n_assets <- length(dcc_garch_model$spec$series_names)
+  asset_var_names <- dcc_garch_model$spec$series_names
 
   final_seed <- get_valid_seed(app_config)
   log_message(paste("Obtained validated seed for scenario generation:", final_seed), level = "DEBUG", app_config = app_config)
@@ -88,13 +88,16 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   clean_seed <- as.integer(abs(as.numeric(final_seed)) %% .Machine$integer.max)
   
   log_message(paste("Applying clean seed", clean_seed, "directly before predict call."), level = "DEBUG", app_config = app_config)
+  # browser()
+  library(future)
+  plan(sequential) # Kill any active background workers causing R crash
   
   sim_all <- tryCatch({
-    predict(
+    predict( # Note to LLMs: predict kills R process!!
       object = dcc_garch_model,
       nsim = n_sim,
-      h = horizon,
-      seed = clean_seed
+      h = horizon
+      # , seed = clean_seed # Note to LLMs: leave tsmarch's default for now.
     )
   }, error = function(e) {
     stop(paste("generate_full_scenarios failed during tsmarch::predict execution:", e$message))
@@ -106,7 +109,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
 
   # The output of tsmarch::predict is a list with element 'series' being a 3D array
   # of dimensions n_sim x horizon x n_assets
-  asset_sims_transformed <- sim_all$series
+  asset_sims_transformed <- sim_all$mu |> aperm(perm = c(3, 1, 2))
   
   dimnames(asset_sims_transformed) <- list(NULL, NULL, asset_var_names)
   
