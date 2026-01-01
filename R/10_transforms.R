@@ -6,10 +6,10 @@
 #' @param original_transform character or function reference ("log_return", "mom_change", "identity")
 #' @param last_level numeric scalar of the last historical level for the series
 #' @return numeric vector of reconstructed levels (length = horizon)
-reconstruct_macro_series <- function(sim_series, original_transform, last_level) {
+reconstruct_macro_series <- function(sim_series, original_transform, last_level, app_config) {
   horizon <- length(sim_series)
   if (is.null(last_level) || !is.finite(last_level)) {
-    warning("Missing or invalid last_level. Returning NA series.")
+    log_message("Missing or invalid last_level. Returning NA series.", level = "WARN", app_config = app_config)
     return(rep(NA_real_, horizon))
   }
 
@@ -62,16 +62,16 @@ reconstruct_macro_series <- function(sim_series, original_transform, last_level)
         reconstructed <- tryCatch({
           inv_fun(sim_series, last_level)
         }, error = function(e) {
-          warning("Inverse transform function '", inv_name1, "'/'", inv_name2, "' failed; returning simulated values. Error: ", e$message)
+          log_message(paste0("Inverse transform function '", inv_name1, "'/'", inv_name2, "' failed; returning simulated values. Error: ", e$message), level = "WARN", app_config = app_config)
           as.numeric(sim_series)
         })
       } else {
         reconstructed <- as.numeric(sim_series)
-        warning("Unknown original_transform; returning simulated values directly. (tried names: ", name, ", ", lname, ")")
+        log_message(paste0("Unknown original_transform; returning simulated values directly. (tried names: ", name, ", ", lname, ")"), level = "WARN", app_config = app_config)
       }
     } else {
       reconstructed <- as.numeric(sim_series)
-      warning("Unknown transform name; returning simulated values directly. (", name, ")")
+      log_message(paste0("Unknown transform name; returning simulated values directly. (", name, ")"), level = "WARN", app_config = app_config)
     }
   }
 

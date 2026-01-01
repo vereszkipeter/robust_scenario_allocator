@@ -60,10 +60,12 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
       for (j in 1:n_macro_vars) {
         ticker <- macro_var_names[j]
         transform_name <- asset_metadata$transform_name[asset_metadata$ticker == ticker][1]
+        log_message(paste0("Reconstructing macro series for ticker: ", ticker, ", transform: ", transform_name), level = "DEBUG", app_config = app_config)
         for (s in 1:n_sim) {
           last_level <- as.numeric(tail(last_historical_levels[, ticker], 1))
           if (length(last_level) == 0) last_level <- NA
-          reconstructed_series <- reconstruct_macro_series(macro_sims_transformed[s, , j], transform_name, last_level)
+          log_message(paste0("  Simulation ", s, ": last_level for ", ticker, " = ", last_level), level = "DEBUG", app_config = app_config)
+          reconstructed_series <- reconstruct_macro_series(macro_sims_transformed[s, , j], transform_name, last_level, app_config)
           macro_scenarios_reconstructed[s, , j] <- reconstructed_series
         }
       }
@@ -91,7 +93,14 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   # browser()
   library(future)
   plan(sequential) # Kill any active background workers causing R crash
+  # browser()
+  invisible(predict( # Note to LLMs: warm-up.
+    object = dcc_garch_model,
+    nsim = 1,
+    h = 1)
+    )
   
+  log_message("Calling tsmarch::predict to generate asset scenarios...", level = "DEBUG", app_config = app_config)
   sim_all <- tryCatch({
     predict( # Note to LLMs: predict kills R process!!
       object = dcc_garch_model,
@@ -100,11 +109,36 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
       # , seed = clean_seed # Note to LLMs: leave tsmarch's default for now.
     )
   }, error = function(e) {
-    stop(paste("generate_full_scenarios failed during tsmarch::predict execution:", e$message))
+    log_message(paste("ERROR: tsmarch::predict failed during execution:", e$message), level = "ERROR", app_config = app_config)
+    return(NULL) # Return NULL on error so the check below can catch it
   })
 
-  if (is.null(sim_all) || length(sim_all) == 0) {
-    stop("tsmarch::predict returned a NULL or empty object.")
+  if (is.null(sim_all)) {
+    log_message("ERROR: tsmarch::predict returned NULL.", level = "ERROR", app_config = app_config)
+    is_sim_all_valid <- FALSE
+  } else if (length(sim_all) == 0) {
+    log_message("ERROR: tsmarch::predict returned an empty object.", level = "ERROR", app_config = app_config)
+    is_sim_all_valid <- FALSE
+  } else if (is.null(sim_all$mu)) {
+    log_message("ERROR: tsmarch::predict returned an object without a 'mu' element.", level = "ERROR", app_config = app_config)
+    is_sim_all_valid <- FALSE
+  } else {
+    is_sim_all_valid <- TRUE
+  }
+
+  if (!is_sim_all_valid) {
+    # Get asset names from the model specification, or if that fails, from asset_metadata
+    if (!is.null(dcc_garch_model) && !is.null(dcc_garch_model$spec$series_names)) {
+      asset_names_for_na <- dcc_garch_model$spec$series_names
+    } else {
+      asset_names_for_na <- asset_metadata %>% filter(asset_class == "Asset") %>% pull(ticker)
+      if (length(asset_names_for_na) == 0) {
+        log_message("Could not determine asset names for NA-filled scenarios. Using generic names.", level = "WARN", app_config = app_config)
+        asset_names_for_na <- paste0("Asset", 1:10) # Fallback to generic names
+      }
+    }
+    na_asset_array <- array(NA_real_, dim = c(n_sim, horizon, length(asset_names_for_na)), dimnames = list(NULL, NULL, asset_names_for_na))
+    return(list(macro_scenarios = macro_scenarios_array, asset_scenarios = na_asset_array))
   }
 
   # The output of tsmarch::predict is a list with element 'series' being a 3D array
@@ -152,14 +186,17 @@ extract_short_rate_from_rsbvar_scenarios <- function(macro_scenarios, app_config
   # The `app_config` should ideally specify this.
   
   short_rate_var_name <- app_config$default$models$short_rate_variable_name
+  log_message(paste0("Extracting short rate using variable name: '", short_rate_var_name, "'"), level = "DEBUG", app_config = app_config)
 
   if (is.null(short_rate_var_name) || short_rate_var_name == "") {
+    log_message("Configuration error: 'short_rate_variable_name' must be specified in app_config$default$models.", level = "ERROR", app_config = app_config)
     stop("Configuration error: 'short_rate_variable_name' must be specified in app_config$default$models.")
   }
   
   macro_var_names <- dimnames(macro_scenarios)[[3]]
 
   if (!(short_rate_var_name %in% macro_var_names)) {
+    log_message(paste("Short rate variable '", short_rate_var_name, "' not found in macro scenarios. Available macro variables are: ", paste(macro_var_names, collapse = ", "), "."), level = "ERROR", app_config = app_config)
     stop(paste("Short rate variable '", short_rate_var_name, "' not found in macro scenarios. Available macro variables are: ", paste(macro_var_names, collapse = ", "), "."))
   }
 

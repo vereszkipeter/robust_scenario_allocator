@@ -103,8 +103,25 @@ ensure_app_config_defaults <- function(config) {
 
 # Logging utility
 log_message <- function(message, level = "INFO", app_config) {
+  # Add a check for app_config to ensure it's a valid list.
+  # This helps diagnose issues where app_config might be missing or malformed upstream.
+  if (!is.list(app_config) || is.null(app_config)) {
+    fallback_message <- paste0("CRITICAL LOGGING ERROR: app_config is NULL or not a list when attempting to log: '", message, "' (Level: ", level, "). Full app_config received: ", deparse(app_config))
+    # Using `cat(..., file=stderr())` for a raw output that doesn't rely on app_config
+    cat(fallback_message, "\n", file = stderr())
+    return(invisible(NULL)) # Prevent further structured logging if app_config is invalid
+  }
+  
   log_levels <- c("DEBUG", "INFO", "WARN", "ERROR")
-  current_level <- match(app_config$default$log_level, log_levels)
+  current_level_str <- app_config$default$log_level # Get log_level from app_config
+  
+  # Validate current_level_str and provide a default if invalid
+  if (is.null(current_level_str) || !(current_level_str %in% log_levels)) {
+    current_level_str <- "INFO" # Default to INFO if config is missing or invalid
+    cat(paste0("WARNING: app_config$default$log_level is missing or invalid. Defaulting to 'INFO'. Message: '", message, "'\n"), file = stderr())
+  }
+  
+  current_level <- match(current_level_str, log_levels)
   message_level <- match(level, log_levels)
   
   if (message_level >= current_level) {
