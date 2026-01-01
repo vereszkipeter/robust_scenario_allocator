@@ -205,8 +205,8 @@ apply_transformations <- function(raw_data_list, asset_metadata, window_to_date,
   print(str(panel_monthly))
 
   # Ensure column names are set
-  if (is.null(colnames(panel_monthly)) && length(colnames(merged_raw_data)) > 0) {
-    colnames(panel_monthly) <- colnames(merged_raw_data)
+  if (is.null(colnames(panel_monthly)) && length(names(raw_data_list)) > 0) {
+    colnames(panel_monthly) <- names(raw_data_list)
   }
 
   transformed_list <- list()
@@ -224,8 +224,12 @@ apply_transformations <- function(raw_data_list, asset_metadata, window_to_date,
     
     # Apply transformation function to the series from the monthly panel
     transformed_series <- tryCatch({
-      # Pass app_config to the transform_func
-      transform_func(series, app_config = app_config)
+      # Check if the function accepts 'app_config' before passing it
+      if ("app_config" %in% names(formals(transform_func))) {
+        transform_func(series, app_config = app_config)
+      } else {
+        transform_func(series)
+      }
     }, error = function(e) {
       warning("Transformation failed for ticker: ", ticker, ". Error: ", e$message)
       return(xts(order.by = as.Date(character(0)))) # Return empty xts on error
@@ -247,22 +251,27 @@ apply_transformations <- function(raw_data_list, asset_metadata, window_to_date,
   }
 
     if (length(transformed_list) > 0) {
-    # The panel_monthly was already merged and handled NAs.
-    # Combine the transformed series robustly using pairwise Reduce to avoid
-    # warnings from merge.xts when providing 'join' to do.call with many objects.
-    if (length(transformed_list) == 1) {
-      merged <- transformed_list[[1]]
+    # Filter out empty xts objects from transformed_list before merging
+    non_empty_transformed_list <- transformed_list[sapply(transformed_list, NROW) > 0]
+    
+    if (length(non_empty_transformed_list) == 0) {
+      return(NULL) # No data to merge
+    } else if (length(non_empty_transformed_list) == 1) {
+      merged <- non_empty_transformed_list[[1]]
     } else {
-      merged <- Reduce(function(x, y) merge(x, y, join = "outer"), transformed_list)
+      merged <- Reduce(function(x, y) merge(x, y, join = "outer"), non_empty_transformed_list)
     }
 
-    # Ensure column names match tickers
-    colnames(merged) <- names(transformed_list)
-    # Remove columns that are entirely NA
+    # Ensure column names match tickers that were actually merged
+    colnames(merged) <- names(non_empty_transformed_list)
+    
+    # Remove columns that are entirely NA (after potential outer join creates NAs)
     all_na <- sapply(as.list(merged), function(col) all(is.na(col)))
     if (any(all_na)) {
       warning("The following series are all NA after transformation and will be dropped: ", paste(names(merged)[all_na], collapse = ", "))
       merged <- merged[, !all_na, drop = FALSE]
+      # If all columns were NA, return NULL
+      if (NCOL(merged) == 0) return(NULL)
     }
     return(merged)
   }

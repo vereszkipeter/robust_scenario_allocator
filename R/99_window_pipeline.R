@@ -8,13 +8,40 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   # browser()
   # 3. Data Processing
   monthly_returns <- apply_transformations(raw_data_list = current_window_raw_data, asset_metadata = asset_metadata, window_to_date = to_date)
+  
+  if (is.null(monthly_returns) || NROW(monthly_returns) == 0 || NCOL(monthly_returns) == 0) {
+    log_message(paste("Window", window_id, ": No valid monthly returns data after transformations. Skipping window processing."), level = "WARN", app_config = app_config)
+    return(list(
+      window_id = window_id, val_date = val_date, oos_from_date = oos_from_date, oos_to_date = oos_to_date,
+      optimal_weights = NULL, base_strategy_pnl_on_scenarios = NULL,
+      entropy_pooled_probabilities = NULL, oos_performance = NULL, ew_benchmark_oos_performance = NULL,
+      error = "No valid monthly returns data"
+    ))
+  }
+  
   log_message(paste0("NROW(monthly_returns) after transformations: ", NROW(monthly_returns)), level = "DEBUG", app_config = app_config)
   split_data <- split_data_by_type(monthly_returns, asset_metadata)
-  asset_returns <- split_data$asset_returns |> na.omit() # Message to LLM: first row is NA what breaks subsequent calculations
+  
+  asset_returns <- split_data$asset_returns
+  if (!is.null(asset_returns)) asset_returns <- na.omit(asset_returns) # Remove first row NA
+  
+  macro_data <- split_data$macro_data
+  if (!is.null(macro_data)) macro_data <- na.omit(macro_data) # Remove first row NA
+
+  if (is.null(asset_returns) || NROW(asset_returns) == 0 || NCOL(asset_returns) == 0) {
+    log_message(paste("Window", window_id, ": No valid asset returns after splitting. Skipping model fitting."), level = "WARN", app_config = app_config)
+    return(list(
+      window_id = window_id, val_date = val_date, oos_from_date = oos_from_date, oos_to_date = oos_to_date,
+      optimal_weights = NULL, base_strategy_pnl_on_scenarios = NULL,
+      entropy_pooled_probabilities = NULL, oos_performance = NULL, ew_benchmark_oos_performance = NULL,
+      error = "No valid asset returns data"
+    ))
+  }
+  
   log_message(paste0("NROW(asset_returns) before DCC-GARCH: ", NROW(asset_returns)), level = "DEBUG", app_config = app_config)
-  macro_data <- split_data$macro_data |> na.omit() # Message to LLM: some rows can be NAs what breaks subsequent calculations
   log_message(paste0("Column names in monthly_returns: ", paste(colnames(monthly_returns), collapse = ", ")), level = "DEBUG", app_config = app_config)
   log_message(paste0("Column names in macro_data before lagging: ", paste(colnames(macro_data), collapse = ", ")), level = "DEBUG", app_config = app_config)
+
 
   macro_original_colnames <- colnames(macro_data)
   if (is.null(macro_data) || NCOL(macro_data) == 0) {
@@ -74,7 +101,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
         
         if (NROW(last_finite_val_raw) > 0) {
       # Standardize the index of last_finite_val to the window's to_date
-      standardized_xts <- xts(as.numeric(last_finite_val_raw), order.by = to_date)
+      standardized_xts <- xts(coredata(last_finite_val_raw), order.by = to_date)
       colnames(standardized_xts) <- ticker_name
       last_historical_data_levels_list[[ticker_name]] <- standardized_xts
     } else {
