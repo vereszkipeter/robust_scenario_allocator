@@ -168,7 +168,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   )
 
   # Anchoring / equilibrium
-  erc_weights <- calculate_erc_weights(asset_returns)
+  erc_weights <- calculate_erc_weights(asset_returns, app_config = app_config)
   implied_equilibrium_returns <- calculate_implied_equilibrium_returns(
     erc_weights = erc_weights,
     asset_returns = asset_returns,

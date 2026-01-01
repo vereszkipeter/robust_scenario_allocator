@@ -291,7 +291,7 @@ calculate_base_strategy_weights <- function(asset_returns, app_config) {
   strategy_weights[["HRP"]] <- calculate_hrp_weights(asset_returns, app_config)
   
   # Strategy 4: ERC
-  strategy_weights[["ERC"]] <- calculate_erc_weights(asset_returns, app_config)
+  strategy_weights[["ERC"]] <- calculate_erc_weights(asset_returns, app_config = app_config)
   
   # Strategy 5: Robust Max-Sharpe (Ledoit-Wolf)
   strategy_weights[["MaxSharpeLW"]] <- calculate_max_sharpe_weights(asset_returns, app_config)
