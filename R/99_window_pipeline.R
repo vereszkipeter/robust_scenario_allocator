@@ -172,7 +172,8 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   implied_equilibrium_returns <- calculate_implied_equilibrium_returns(
     erc_weights = erc_weights,
     asset_returns = asset_returns,
-    risk_aversion_param = app_config$default$models$risk_aversion_param
+    risk_aversion_param = app_config$default$models$risk_aversion_param,
+    app_config = app_config
   )
 
   # Views & entropy pooling

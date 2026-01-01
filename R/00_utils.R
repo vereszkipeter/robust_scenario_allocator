@@ -140,15 +140,20 @@ log_message <- function(message, level = "INFO", app_config) {
 #' @param solver_args list; additional named args passed to `CVXR::solve`
 #' @return If `allow_fallback = FALSE` returns CVXR result object on success.
 #'         If `allow_fallback = TRUE` returns list(result = CVXR_result_or_NULL, error = NULL_or_message)
-safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS", "OSQP"), allow_fallback = TRUE, verbose = FALSE, solver_args = list()) {
+safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS", "OSQP"), allow_fallback = TRUE, verbose = FALSE, solver_args = list(), app_config) {
   if (!requireNamespace("CVXR", quietly = TRUE)) {
     msg <- "Package 'CVXR' is required for safe_solve_cvxr"
-    if (allow_fallback) return(list(result = NULL, error = msg)) else stop(msg)
+    if (allow_fallback) {
+      log_message(msg, level = "ERROR", app_config = app_config)
+      return(list(result = NULL, error = msg))
+    } else {
+      stop(msg)
+    }
   }
 
   errors <- list()
   for (s in solvers) {
-    if (verbose) message("Trying CVXR solver: ", s)
+    if (verbose) log_message(paste0("Trying CVXR solver: ", s), level = "DEBUG", app_config = app_config)
     attempt <- tryCatch({
       # Construct positional args: first the problem object, then solver and any solver_args
       args <- c(list(problem), list(solver = s), solver_args)
@@ -181,5 +186,10 @@ safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS", "OSQP"), allow_f
 
   # All solvers failed or none returned acceptable status
   msg <- paste(names(errors), unlist(errors), sep = ": ", collapse = "; ")
-  if (allow_fallback) return(list(result = NULL, error = msg)) else stop(msg)
+  if (allow_fallback) {
+    return(list(result = NULL, error = msg))
+  } else {
+    log_message(msg, level = "ERROR", app_config = app_config)
+    stop(msg)
+  }
 }

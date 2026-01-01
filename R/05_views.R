@@ -11,7 +11,7 @@ library(corpcor)  # For cov.shrink (Ledoit-Wolf shrinkage)
 #' @param asset_returns An xts object of historical asset returns.
 #' @param risk_aversion_param A numeric value representing the risk aversion coefficient.
 #' @return A named numeric vector of implied equilibrium excess returns.
-calculate_implied_equilibrium_returns <- function(erc_weights, asset_returns, risk_aversion_param) {
+calculate_implied_equilibrium_returns <- function(erc_weights, asset_returns, risk_aversion_param, app_config) {
   
   # Ensure weights are aligned with asset_returns columns
   # This function assumes erc_weights are already named correctly.
@@ -20,7 +20,10 @@ calculate_implied_equilibrium_returns <- function(erc_weights, asset_returns, ri
   # Ensure missing values are handled: drop rows with any NA before estimating covariance.
   if (any(is.na(asset_returns))) {
     asset_returns <- stats::na.omit(asset_returns)
-    if (NROW(asset_returns) == 0) stop("All rows removed after na.omit on asset_returns; cannot compute covariance.")
+    if (NROW(asset_returns) == 0) {
+      log_message("All rows removed after na.omit on asset_returns; cannot compute covariance.", level = "ERROR", app_config = app_config)
+      stop("All rows removed after na.omit on asset_returns; cannot compute covariance.")
+    }
   }
   # cov.shrink from corpcor provides shrinkage estimation
   asset_cov_matrix <- corpcor::cov.shrink(as.matrix(asset_returns), verbose = FALSE)
@@ -28,6 +31,7 @@ calculate_implied_equilibrium_returns <- function(erc_weights, asset_returns, ri
   # Ensure asset_cov_matrix rows/cols align with erc_weights and asset_returns.
   # Assuming erc_weights are named.
   if (!all(names(erc_weights) %in% colnames(asset_cov_matrix))) {
+    log_message("ERC weights names do not match covariance matrix column names.", level = "ERROR", app_config = app_config)
     stop("ERC weights names do not match covariance matrix column names.")
   }
   
@@ -42,7 +46,7 @@ calculate_implied_equilibrium_returns <- function(erc_weights, asset_returns, ri
   implied_returns <- as.numeric(implied_returns)
   names(implied_returns) <- colnames(asset_cov_matrix)
   
-  message("Implied equilibrium returns calculated.")
+  log_message("Implied equilibrium returns calculated.", level = "DEBUG", app_config = app_config)
   return(implied_returns)
 }
 
@@ -70,7 +74,7 @@ model_yield_curve_and_term_premium_view <- function(short_rate_scenarios, app_co
   
   # Ensure short_rate_scenarios is not NULL
   if (is.null(short_rate_scenarios)) {
-    warning("short_rate_scenarios is NULL. Cannot generate scenario-dependent term premium. Returning NULL term_premium_scenarios.")
+    log_message("short_rate_scenarios is NULL. Cannot generate scenario-dependent term premium. Returning NULL term_premium_scenarios.", level = "WARN", app_config = app_config)
     term_premium_view_bounds <- list(min = term_premium_min, max = term_premium_max)
     return(list(term_premium_scenarios = NULL, term_premium_view_bounds = term_premium_view_bounds))
   }
@@ -88,7 +92,7 @@ model_yield_curve_and_term_premium_view <- function(short_rate_scenarios, app_co
     }
   }
   
-  message("Generated scenario-dependent term premium (simplified model).")
+  log_message("Generated scenario-dependent term premium (simplified model).", level = "DEBUG", app_config = app_config)
   
   term_premium_view_bounds <- list(
     min = term_premium_min,
@@ -199,23 +203,23 @@ apply_sequential_entropy_pooling <- function(simulated_scenarios, implied_equili
   problem <- Problem(objective, constraints)
 
   # Use safe CVXR wrapper; allow fallback to uniform probabilities on failure
-  cvxr_res <- safe_solve_cvxr(problem, solvers = c("ECOS", "SCS"), allow_fallback = TRUE)
+  cvxr_res <- safe_solve_cvxr(problem, solvers = c("ECOS", "SCS"), allow_fallback = TRUE, app_config = app_config)
 
   # If CVXR returned an error message, include diagnostic details in the warning
   if (is.null(cvxr_res$result) && !is.null(cvxr_res$error)) {
-    warning("CVXR Entropy Pooling failed. Solver diagnostics: ", cvxr_res$error)
+    log_message(paste0("CVXR Entropy Pooling failed. Solver diagnostics: ", cvxr_res$error), level = "WARN", app_config = app_config)
   }
 
   # Check if CVXR solved successfully
   if (is.null(cvxr_res$result)) {
-    warning("CVXR Entropy Pooling failed to solve optimally or was infeasible. Returning uniform prior probabilities. Error: ", cvxr_res$error)
+    log_message(paste0("CVXR Entropy Pooling failed to solve optimally or was infeasible. Returning uniform prior probabilities. Error: ", cvxr_res$error), level = "WARN", app_config = app_config)
     return(p_prior)
   }
   
   # If the solver returned a CVXR result object, extract probabilities
   adjusted_probabilities <- as.numeric(cvxr_res$result$getValue(p_new))
-  message("Entropy Pooling solved successfully using CVXR.")
+  log_message("Entropy Pooling solved successfully using CVXR.", level = "DEBUG", app_config = app_config)
   
-  message("Applied (advanced placeholder) entropy pooling.")
+  log_message("Applied (advanced placeholder) entropy pooling.", level = "INFO", app_config = app_config)
   return(adjusted_probabilities)
 }
