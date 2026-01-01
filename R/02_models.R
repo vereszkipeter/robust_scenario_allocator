@@ -271,7 +271,7 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   garch_model_list <- lapply(colnames(asset_returns), function(col_name) {
     log_message(paste("Fitting univariate GARCH for asset:", col_name), level = "DEBUG", app_config = app_config)
     spec <- tsgarch::garch_modelspec(
-      y = asset_returns[, col_name],
+      y = asset_returns[, col_name, drop = FALSE],
       model = "gjrgarch",
       constant = TRUE,
       distribution = "norm"

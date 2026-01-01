@@ -424,7 +424,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   
   # Filter only asset returns (excluding macro variables)
   oos_asset_returns <- oos_monthly_returns[, colnames(oos_monthly_returns) %in% 
-                                             (asset_metadata %>% filter(asset_class == "Asset") %>% pull(ticker))]
+                                             (asset_metadata %>% filter(asset_class == "Asset") %>% pull(ticker)), drop = FALSE]
   
   if (NROW(oos_asset_returns) == 0) {
     log_message(paste0("No out-of-sample asset returns found for period: ", oos_from_date, " to ", oos_to_date), level = "WARN", app_config = app_config)
