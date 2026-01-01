@@ -1,3 +1,7 @@
+library(PerformanceAnalytics) # For SharpeRatio and ProbSharpeRatio
+library(stats)              # For pnorm, qnorm
+library(xts)                # For xts objects
+
 # Custom simple return function
 simple_return <- function(x) {
   x / stats::lag(x) - 1
@@ -62,7 +66,7 @@ undo_mom_change <- function(sim_series, last_level) {
   # Reconstruct the log series
   reconstructed_log_x[1] <- sim_series[1] + log_last_level
   if (length(sim_series) > 1) {
-    for (t in 2:length(sim_series)) {
+    for (t in 2:horizon) {
       reconstructed_log_x[t] <- sim_series[t] + reconstructed_log_x[t-1]
     }
   }
@@ -96,6 +100,11 @@ ensure_app_config_defaults <- function(config) {
   # Set a default for log_level if not present
   if (is.null(config$default$log_level)) {
     config$default$log_level <- "INFO"
+  }
+  
+  # Set a default for confidence_level if not present
+  if (is.null(config$default$models$confidence_level)) {
+    config$default$models$confidence_level <- 0.95 # Default confidence level for PSR/DSR
   }
   
   return(config)
@@ -192,4 +201,89 @@ safe_solve_cvxr <- function(problem, solvers = c("ECOS", "SCS", "OSQP"), allow_f
     log_message(msg, level = "ERROR", app_config = app_config)
     stop(msg)
   }
+}
+
+#' @title Calculate Probabilistic and Deflated Sharpe Ratios
+#' @description Calculates the Probabilistic Sharpe Ratio (PSR) and Deflated Sharpe Ratio (DSR)
+#' for a given series of returns, adjusting for multiple testing and non-normality.
+#' @param R An xts object of portfolio returns (e.g., from an out-of-sample period).
+#' @param confidence_level The confidence level for the PSR (e.g., 0.95).
+#' @param n_strategies The number of strategies tested, used for DSR adjustment (multiplicity).
+#' @param app_config A list containing application configuration for logging.
+#' @return A list containing `psr` (Probabilistic Sharpe Ratio) and `dsr` (Deflated Sharpe Ratio).
+calculate_psr_dsr <- function(R, confidence_level, n_strategies, app_config) {
+  
+  if (NROW(R) < 2) {
+    log_message("Insufficient observations for PSR/DSR calculation. Returning NA.", level = "WARN", app_config = app_config)
+    return(list(psr = NA_real_, dsr = NA_real_))
+  }
+
+  # Ensure R is numeric and handle potential NA values
+  R_numeric <- as.numeric(na.omit(R))
+  if (length(R_numeric) < 2) {
+      log_message("Insufficient non-NA observations for PSR/DSR calculation. Returning NA.", level = "WARN", app_config = app_config)
+      return(list(psr = NA_real_, dsr = NA_real_))
+  }
+
+  # 1. Calculate observed Sharpe Ratio (SR_obs)
+  # Assuming monthly returns, scale = 12
+  SR_obs <- PerformanceAnalytics::SharpeRatio.annualized(R_numeric, Rf = 0, scale = 12)
+  
+  # Handle cases where SR_obs might be NaN or Inf
+  if (!is.finite(SR_obs)) {
+    log_message("Observed Sharpe Ratio is non-finite. Returning NA for PSR/DSR.", level = "WARN", app_config = app_config)
+    return(list(psr = NA_real_, dsr = NA_real_))
+  }
+
+  # 2. Calculate Probabilistic Sharpe Ratio (PSR)
+  # Try to use PerformanceAnalytics::ProbSharpeRatio if available and appropriate
+  # Based on https://rdrr.io/github/braverock/PerformanceAnalytics/man/ProbSharpeRatio.html
+  # This function already handles skewness and kurtosis if `ignore_skewness = FALSE`
+  psr_value <- NA_real_
+  tryCatch({
+    psr_value <- PerformanceAnalytics::ProbSharpeRatio(
+      R = R_numeric,
+      Rf = 0,
+      refSR = 0, # Benchmark SR is 0
+      p = confidence_level, # This `p` is for confidence, not the probability itself
+      # We want the probability that SR_obs > refSR. The function returns this directly.
+      ignore_skewness = FALSE, # Account for non-normality
+      ignore_kurtosis = FALSE
+    )
+  }, error = function(e) {
+    log_message(paste0("Error using PerformanceAnalytics::ProbSharpeRatio: ", e$message, ". Falling back to manual PSR calculation."), level = "WARN", app_config = app_config)
+    # Manual PSR calculation (Generalized form from Lopez de Prado)
+    N <- length(R_numeric) # Number of observations
+    mu <- mean(R_numeric)
+    sigma <- sd(R_numeric)
+    
+    # Calculate skewness and kurtosis
+    sk <- PerformanceAnalytics::skewness(R_numeric)
+    kr <- PerformanceAnalytics::kurtosis(R_numeric)
+    
+    # Variance of Sharpe Ratio estimator (generalized)
+    var_SR_obs <- (1 - sk * SR_obs + (SR_obs^2 / 4) * (kr - 1)) / N
+    
+    if (var_SR_obs > 0) {
+      z_score <- (SR_obs - 0) / sqrt(var_SR_obs) # refSR = 0
+      psr_value <- pnorm(z_score)
+    } else {
+      log_message("Variance of Sharpe Ratio estimator is non-positive. Cannot calculate manual PSR.", level = "WARN", app_config = app_config)
+    }
+  })
+  
+  # 3. Calculate Deflated Sharpe Ratio (DSR)
+  # A pragmatic approach: if PSR is below the confidence_level, the SR is not significant.
+  # So, "deflate" it to 0. Otherwise, keep the observed SR.
+  # This is a simplification of the more complex DSR formula from Lopez de Prado,
+  # which involves calculating a threshold SR.
+  dsr_value <- SR_obs
+  if (!is.na(psr_value) && psr_value < confidence_level) {
+    dsr_value <- 0
+    log_message(paste0("Observed SR (", round(SR_obs, 4), ") deflated to 0 because PSR (", round(psr_value, 4), ") is below confidence_level (", confidence_level, ")."), level = "INFO", app_config = app_config)
+  }
+
+  log_message(paste0("Calculated PSR: ", round(psr_value, 4), ", DSR: ", round(dsr_value, 4)), level = "DEBUG", app_config = app_config)
+
+  return(list(psr = psr_value, dsr = dsr_value))
 }

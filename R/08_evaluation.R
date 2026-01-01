@@ -127,7 +127,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
                                              (asset_metadata %>% filter(asset_class == "Asset") %>% pull(ticker))]
   
   if (NROW(oos_asset_returns) == 0) {
-    warning("No out-of-sample asset returns found for period: ", oos_from_date, " to ", oos_to_date)
+    log_message(paste0("No out-of-sample asset returns found for period: ", oos_from_date, " to ", oos_to_date), level = "WARN", app_config = app_config)
     return(list(
       oos_returns = NULL,
       metrics = list(
@@ -146,7 +146,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   
   # Ensure weights sum to 1, or handle if there are missing assets
   if (sum(ordered_weights) == 0 && length(ordered_weights) > 0) {
-      warning("All optimal weights became zero for OOS period due to missing assets. Cannot compute OOS performance.")
+      log_message("All optimal weights became zero for OOS period due to missing assets. Cannot compute OOS performance.", level = "WARN", app_config = app_config)
       return(list(
         oos_returns = NULL,
         metrics = list(
@@ -170,7 +170,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   if (NROW(oos_portfolio_returns) > 0 && !is.null(transaction_cost) && transaction_cost > 0) {
     # Deduct transaction cost from the first return. This is a one-time cost for rebalancing.
     oos_portfolio_returns[1, 1] <- oos_portfolio_returns[1, 1] - transaction_cost
-    message("Applied transaction cost of ", transaction_cost, " to OOS returns starting ", index(oos_portfolio_returns[1,]))
+    log_message(paste0("Applied transaction cost of ", transaction_cost, " to OOS returns starting ", index(oos_portfolio_returns[1,])), level = "INFO", app_config = app_config)
   }
   
   # 5. Compute performance metrics
@@ -206,7 +206,8 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   psr_dsr_results <- calculate_psr_dsr(
     R = oos_portfolio_returns,
     confidence_level = confidence_level_psr_dsr,
-    n_strategies = 1 # Assuming evaluation of a single selected portfolio
+    n_strategies = 1, # Assuming evaluation of a single selected portfolio
+    app_config = app_config
   )
   metrics$psr <- psr_dsr_results$psr
   metrics$dsr <- psr_dsr_results$dsr
@@ -216,6 +217,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
         metrics = metrics
       ))
   }
+}
   
   #' @title Compare Simulated and Historical Distributions
   #' @description Calculates mean, standard deviation, and performs a Kolmogorov-Smirnov test
