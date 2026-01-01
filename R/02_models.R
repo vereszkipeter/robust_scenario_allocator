@@ -14,7 +14,7 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
 
   log_message("Starting fit_rsbvar_model.", level = "DEBUG", app_config = app_config)
 
-  macro_matrix <- as.matrix(macro_data)
+  macro_matrix <- as.matrix(coredata(macro_data))
   log_message(paste0("Dimensions of macro_matrix for RS-BVAR: ", NROW(macro_matrix), " rows, ", NCOL(macro_matrix), " cols."), level = "DEBUG", app_config = app_config)
 
   if (NCOL(macro_matrix) < 2) {
