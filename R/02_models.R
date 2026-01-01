@@ -63,6 +63,8 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   M <- app_config$default$models$rsbvar_M
   N <- ncol(macro_matrix)
   
+  log_message(paste0("RS-BVAR settings: MCMC iterations = ", n_iter_mcmc, ", Burn-in = ", n_burnin_mcmc, ", Regimes (M) = ", M), level = "INFO", app_config = app_config)
+  
   B_matrix_initial <- matrix(TRUE, N, N)
   B_matrix_initial[upper.tri(B_matrix_initial)] <- FALSE
   
@@ -126,6 +128,18 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   })
   log_message(paste0("bsvars model estimation complete. Class: ", paste(class(fitted_model), collapse = ", ")), level = "DEBUG", app_config = app_config)
 
+  # --- Log posterior dimensions ---
+  if (!is.null(fitted_model) && !is.null(fitted_model$posterior)) {
+    log_message("Logging posterior component dimensions:", level = "DEBUG", app_config = app_config)
+    for (param in names(fitted_model$posterior)) {
+      if (is.array(fitted_model$posterior[[param]]) || is.matrix(fitted_model$posterior[[param]])) {
+        log_message(paste0("  - ", param, ": ", paste(dim(fitted_model$posterior[[param]]), collapse = " x ")), level = "DEBUG", app_config = app_config)
+      } else {
+        log_message(paste0("  - ", param, ": length ", length(fitted_model$posterior[[param]])), level = "DEBUG", app_config = app_config)
+      }
+    }
+  }
+
   # --- Normalization for MSH models ---
   if (!is.null(fitted_model) && inherits(fitted_model, "PosteriorBSVARMSH")) {
     log_message("Attempting to normalize posterior draws for interpretability.", level = "DEBUG", app_config = app_config)
@@ -160,9 +174,9 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   tryCatch({
     model_summary <- summary(fitted_model)
     utils::capture.output(print(model_summary), file = summary_file)
-    message(paste("RS-BVAR model summary saved to", summary_file))
+    log_message(paste("RS-BVAR model summary saved to", summary_file), level = "INFO", app_config = app_config)
   }, error = function(e) {
-    warning(paste("Could not save RS-BVAR model summary:", e$message))
+    log_message(paste("Could not save RS-BVAR model summary:", e$message), level = "WARN", app_config = app_config)
   })
   
   trace_plot_file <- file.path(diag_dir, paste0(window_name, "_trace_plots.pdf"))
@@ -185,19 +199,24 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
     tryCatch({
       grDevices::pdf(trace_plot_file, width = 8, height = 10)
       
-      # Now rely on the generic plot function for bsvars objects for simplicity and robustness
-      # Note to LLMs: there's no plot method for PosteriorBSVARMSH class object: 
-      # regime probability plot is here only for a placeholder
-      plot(compute_regime_probabilities(fitted_model))
+      # Attempt to use the generic plot method first
+      tryCatch({
+        plot(fitted_model)
+        log_message("Generic plot() for bsvars object successful.", level = "DEBUG", app_config = app_config)
+      }, error = function(e_plot) {
+        log_message(paste("Generic plot() for bsvars object failed:", e_plot$message, ". Falling back to regime probabilities plot."), level = "WARN", app_config = app_config)
+        # Fallback to plotting regime probabilities
+        plot(compute_regime_probabilities(fitted_model))
+      })
       
       grDevices::dev.off()
       log_message(paste("RS-BVAR trace plots saved to", trace_plot_file), level = "INFO", app_config = app_config)
       
-    }, error = function(e) {
+    }, error = function(e_pdf) {
       if(names(grDevices::dev.cur()) == "pdf") {
          grDevices::dev.off()
       }
-      warning(paste("Could not save RS-BVAR trace plots for window ", window_name, ":", e$message, ". Creating skipped file."))
+      warning(paste("Could not save RS-BVAR trace plots for window ", window_name, ":", e_pdf$message, ". Creating skipped file."))
       file.create(sub("\\.pdf$", "_skipped_plot_error.txt", trace_plot_file))
     })
   } else {
@@ -250,30 +269,46 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   
   # browser()
   garch_model_list <- lapply(colnames(asset_returns), function(col_name) {
+    log_message(paste("Fitting univariate GARCH for asset:", col_name), level = "DEBUG", app_config = app_config)
     spec <- tsgarch::garch_modelspec(
       y = asset_returns[, col_name],
-      model = "gjrgarch", # Keep this consistent for all assets
+      model = "gjrgarch",
       constant = TRUE,
       distribution = "norm"
     )
     
-    # Try standard estimation
     fit <- tryCatch({
       tsmethods::estimate(spec, keep_tmb = TRUE, stationarity_constraint = 0.95)
-    }, error = function(e) NULL)
+    }, error = function(e) {
+      log_message(paste("Initial GARCH fit failed for", col_name, ":", e$message), level = "WARN", app_config = app_config)
+      return(NULL)
+    })
     
-    # Check for NaNs (using your persistence_summary helper logic)
     is_failed <- is.null(fit) || any(is.nan(fit$persistence_summary[2])) || any(is.nan(fit$vcoef))
     
     if (is_failed) {
-      message(paste("Cleaning Hessian for:", col_name))
-      # RE-FIT with vcov = FALSE. This keeps the GJR structure (5 params)
-      # but prevents the NaNs that crash the DCC and predict()
-      fit <- tsmethods::estimate(spec, keep_tmb = TRUE, 
-                                 stationarity_constraint = 0.95, vcov = FALSE)
+      log_message(paste("Initial GARCH fit for", col_name, "was unstable (NaNs found). Re-fitting without vcov to get coefficients."), level = "INFO", app_config = app_config)
+      fit <- tryCatch({
+        tsmethods::estimate(spec, keep_tmb = TRUE, stationarity_constraint = 0.95, vcov = FALSE)
+      }, error = function(e_refit) {
+        log_message(paste("GARCH re-fit also failed for", col_name, ":", e_refit$message), level = "ERROR", app_config = app_config)
+        return(NULL)
+      })
     }
+    
+    if (is.null(fit)) {
+      log_message(paste("Could not obtain a stable GARCH fit for asset:", col_name), level = "ERROR", app_config = app_config)
+    } else {
+      log_message(paste("Successfully fitted univariate GARCH for asset:", col_name), level = "DEBUG", app_config = app_config)
+    }
+    
     return(fit)
   })
+  
+  if (any(sapply(garch_model_list, is.null))) {
+    log_message("One or more univariate GARCH models failed to fit. Aborting DCC estimation and using fallback.", level = "ERROR", app_config = app_config)
+    return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))
+  }
   
   garch_model <- to_multi_estimate(garch_model_list)
   names(garch_model) <- colnames(asset_returns)
@@ -285,16 +320,18 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
     distribution = "mvt"
   )
   
-  # # 1. Force a minimum alpha_1 (shocks must update correlation)
-  # dcc_spec$parmatrix[parameter == "alpha_1", lower := 0.015]
-  # 
-  # # 2. Cap beta_1 (ensure correlations don't have a unit root)
-  # dcc_spec$parmatrix[parameter == "beta_1", upper := 0.88]
-  # 
-  # # 3. Ensure the shape (degrees of freedom) stays in a stable range
-  # # (mvt with shape near 2.0 causes the Cholesky/predict crash)
-  # dcc_spec$parmatrix[parameter == "shape", lower := 5.0]
-   
+  log_message("Setting constraints on DCC specification: alpha_1 lower=0.01, beta_1 upper=0.90, shape lower=5.0", level = "INFO", app_config = app_config)
+  # 1. Force a minimum weight on news (alpha)
+  dcc_spec$parmatrix[parameter == "alpha_1", lower := 0.01]
+  
+  # 2. Force a maximum persistence (beta) so it doesn't drift to 1.0
+  dcc_spec$parmatrix[parameter == "beta_1", upper := 0.90]
+  
+  # 3. Increase the lower bound of the shape parameter
+  # A shape of 2.01 is too close to 'infinite variance' and causes numerical blowups
+  dcc_spec$parmatrix[parameter == "shape", lower := 5.0]
+  
+  
   log_message("dcc_modelspec created.", level = "DEBUG", app_config = app_config)
   saveRDS(dcc_spec, file.path(diag_dir, paste0("dcc_spec_", timestamp, ".rds")))
 
@@ -315,9 +352,26 @@ fit_dcc_t_garch_model <- function(asset_returns, app_config) {
   dcc_fit_model <- estimate(dcc_spec)
 
   if (inherits(dcc_fit_model, "dcc.estimate")) {
-      log_message("DCC-GARCH model fitting with tsmarch successful.", level = "DEBUG", app_config = app_config)
+      log_message("DCC-GARCH model fitting with tsmarch successful.", level = "INFO", app_config = app_config)
+      
+      # --- Save Summary ---
+      window_name <- "unidentified_window"
+       if (requireNamespace("xts", quietly = TRUE) && xts::is.xts(asset_returns) && nrow(asset_returns) > 0) {
+        start_date <- format(zoo::index(asset_returns)[1], "%Y-%m-%d")
+        end_date <- format(zoo::index(asset_returns)[nrow(asset_returns)], "%Y-%m-%d")
+        window_name <- paste0("window_", start_date, "_to_", end_date)
+      }
+      summary_file <- file.path(diag_dir, paste0(window_name, "_dcc_summary.txt"))
+      tryCatch({
+        model_summary <- summary(dcc_fit_model)
+        utils::capture.output(print(model_summary), file = summary_file)
+        log_message(paste("DCC-GARCH model summary saved to", summary_file), level = "INFO", app_config = app_config)
+      }, error = function(e) {
+        log_message(paste("Could not save DCC-GARCH model summary:", e$message), level = "WARN", app_config = app_config)
+      })
+      
   } else {
-    log_message("WARNING: tsmarch::estimate did not return a valid tsmarch.estimate object. A fallback using empirical moments will be used.", level = "WARN", app_config = app_config)
+    log_message("WARNING: tsmarch::estimate did not return a valid dcc.estimate object. Using fallback with empirical moments.", level = "WARN", app_config = app_config)
     emp_mean <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) colMeans(asset_returns, na.rm = TRUE) else numeric(0)
     emp_cov <- if (!is.null(asset_returns) && NCOL(asset_returns) >= 1) cov(as.matrix(asset_returns), use = "pairwise.complete.obs") else matrix(NA_real_)
     return(list(fallback = TRUE, emp_mean = emp_mean, emp_cov = emp_cov, asset_names = colnames(asset_returns)))

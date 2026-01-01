@@ -58,13 +58,19 @@ generate_wf_windows <- function(app_config, panel_data) {
     actual_training_months <- ((lubridate::year(training_window_end) - lubridate::year(training_window_start)) * 12) + 
                               lubridate::month(training_window_end) - lubridate::month(training_window_start) + 1 
     
+    # Calculate actual OOS months
+    actual_oos_months <- ((lubridate::year(oos_to_date) - lubridate::year(oos_from_date)) * 12) + 
+                         lubridate::month(oos_to_date) - lubridate::month(oos_from_date) + 1
+
     log_message(paste0("  training_window_start: ", training_window_start, ", training_window_end: ", training_window_end), level = "DEBUG", app_config = app_config)
     log_message(paste0("  actual_training_months: ", actual_training_months, ", min_dcc_obs: ", min_dcc_obs), level = "DEBUG", app_config = app_config)
     log_message(paste0("  oos_from_date: ", oos_from_date, ", oos_to_date: ", oos_to_date), level = "DEBUG", app_config = app_config)
+    log_message(paste0("  actual_oos_months: ", actual_oos_months, ", roll_forward_months: ", roll_forward_months), level = "DEBUG", app_config = app_config)
     log_message(paste0("  Condition check: oos_from_date (", oos_from_date, ") <= oos_to_date (", oos_to_date, ") is ", oos_from_date <= oos_to_date), level = "DEBUG", app_config = app_config)
     log_message(paste0("  Condition check: actual_training_months (", actual_training_months, ") >= min_dcc_obs (", min_dcc_obs, ") is ", actual_training_months >= min_dcc_obs), level = "DEBUG", app_config = app_config)
+    log_message(paste0("  Condition check: actual_oos_months (", actual_oos_months, ") >= roll_forward_months (", roll_forward_months, ") is ", actual_oos_months >= roll_forward_months), level = "DEBUG", app_config = app_config)
     
-    if (oos_from_date <= oos_to_date && actual_training_months >= min_dcc_obs) { 
+    if (oos_from_date <= oos_to_date && actual_training_months >= min_dcc_obs && actual_oos_months >= roll_forward_months) { 
       log_message(paste0("    Adding window ", window_id_counter), level = "DEBUG", app_config = app_config)
       windows <- bind_rows(windows, tibble(
         window_id = window_id_counter,
@@ -75,7 +81,7 @@ generate_wf_windows <- function(app_config, panel_data) {
         oos_to_date = oos_to_date
       ))
     } else {
-      log_message(paste0("    Skipping window ", window_id_counter, " due to failed condition."), level = "DEBUG", app_config = app_config)
+      log_message(paste0("    Skipping window ", window_id_counter, " due to failed conditions (OOS length or training data)."), level = "DEBUG", app_config = app_config)
     }
     
     # Advance current_to_date, ensuring it remains a month-end date
@@ -83,7 +89,7 @@ generate_wf_windows <- function(app_config, panel_data) {
     window_id_counter <- window_id_counter + 1
   }
   
-  log_message(paste0("Generated ", nrow(windows), " walk-forward validation windows. (Minimum ", min_dcc_obs, " months training data required)."), level = "DEBUG", app_config = app_config)
+  log_message(paste0("Generated ", nrow(windows), " walk-forward validation windows. (Minimum ", min_dcc_obs, " months training data and ", roll_forward_months, " months OOS data required)."), level = "DEBUG", app_config = app_config)
   return(windows)
 }
 
@@ -173,6 +179,7 @@ safely_process_window <- function(...) {
   window_id <- window_args$window_id
   
   message("Processing window_id: ", window_id)
+  log_message(paste0("Arguments received for window_id ", window_id, ": ", paste(names(window_args), collapse = ", ")), level = "DEBUG", app_config = window_args$app_config)
   
   result <- tryCatch({
     do.call(process_window, window_args)

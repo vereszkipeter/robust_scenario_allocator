@@ -11,17 +11,19 @@ library(rlang)              # For the `%||%` operator
 # --- Helper Functions for Strategy Implementations ---
 
 #' @title Get Equal Weight Fallback Weights
-#' @description Creates an equal-weighted portfolio as a fallback.
+#' @description Creates an equal-weighted portfolio as a fallback and logs a warning.
 #' @param R An xts object of asset returns.
-#' @param strategy_name The name of the strategy that failed, for a more informative warning.
+#' @param strategy_name The name of the strategy that failed.
+#' @param app_config A list containing application configuration for logging.
 #' @return A named numeric vector of equal weights.
-get_equal_weight_fallback <- function(R, strategy_name) {
-  warning("Error calculating ", strategy_name, " weights. Returning equal weights as fallback.")
+get_equal_weight_fallback <- function(R, strategy_name, app_config) {
+  log_message(paste("Error calculating", strategy_name, "weights. Returning equal weights as fallback."), level = "WARN", app_config = app_config)
   n_assets <- ncol(R)
   weights <- rep(1 / n_assets, n_assets)
   names(weights) <- colnames(R)
   return(weights)
 }
+
 
 #' @title Calculate Ledoit-Wolf Shrinkage Covariance Matrix
 #' @description Computes the Ledoit-Wolf shrinkage covariance matrix.
@@ -39,22 +41,25 @@ calculate_lw_covariance <- function(R) {
 #' @description Calculates portfolio weights that minimize Conditional Value-at-Risk (CVaR).
 #' Uses `PortfolioAnalytics` and a linear programming solver.
 #' @param asset_returns An xts object of asset returns.
-#' @param portfolio_name A character string for the portfolio name.
-#' @param alpha_cvar Numeric, the alpha level for CVaR (e.g., 0.05 for 95% CVaR).
+#' @param app_config A list containing application configuration.
 #' @return A vector of portfolio weights.
 calculate_min_cvar_weights <- function(asset_returns, app_config) {
+  log_message("Starting Min-CVaR (PortfolioAnalytics) weight calculation.", level = "DEBUG", app_config = app_config)
   alpha_cvar <- app_config$default$models$cvar_alpha
   portf <- portfolio.spec(assets = colnames(asset_returns))
   portf <- add.constraint(portf, type = "full_investment")
   portf <- add.constraint(portf, type = "long_only")
   portf <- add.objective(portf, type = "risk", name = "CVaR", arguments = list(p = alpha_cvar))
-  
+
   result <- try(optimize.portfolio(R = asset_returns, portfolio = portf, optimize_method = "ROI", trace = FALSE), silent = TRUE)
 
   if (inherits(result, "try-error")) {
-    return(get_equal_weight_fallback(asset_returns, "Min-CVaR"))
+    error_msg <- paste("Min-CVaR (PortfolioAnalytics) optimization failed. Error:", as.character(result))
+    log_message(error_msg, level = "ERROR", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "Min-CVaR", app_config))
   } else {
     weights <- PortfolioAnalytics::extractWeights(result)
+    log_message("Successfully calculated Min-CVaR (PortfolioAnalytics) weights.", level = "DEBUG", app_config = app_config)
     return(as.numeric(weights))
   }
 }
@@ -76,7 +81,7 @@ calculate_min_cdar_weights <- function(asset_returns, app_config) {
   
   if (NROW(asset_returns_clean) < 2 || NCOL(asset_returns_clean) < 1) {
     log_message("Insufficient data after na.omit for Min-CVaR (CVXR); returning equal weights.", level = "WARN", app_config = app_config)
-    return(get_equal_weight_fallback(asset_returns, "Min-CVaR (CVXR)"))
+    return(get_equal_weight_fallback(asset_returns, "Min-CVaR (CVXR)", app_config))
   }
 
   asset_returns_mat <- as.matrix(asset_returns_clean)
@@ -141,7 +146,7 @@ calculate_min_cdar_weights <- function(asset_returns, app_config) {
     # saveRDS(list(asset_returns = asset_returns_mat, problem = problem, solve_result = solve_result), file = diag_file)
     # log_message(paste("Saved Min-CVaR (CVXR) diagnostic data to", diag_file), level = "INFO", app_config = app_config)
     
-    return(get_equal_weight_fallback(asset_returns, "Min-CVaR (CVXR)"))
+    return(get_equal_weight_fallback(asset_returns, "Min-CVaR (CVXR)", app_config))
 
   } else {
     # Success
@@ -157,21 +162,34 @@ calculate_min_cdar_weights <- function(asset_returns, app_config) {
 #' @title Calculate Hierarchical Risk Parity (HRP) Weights
 #' @description Calculates portfolio weights using Hierarchical Risk Parity.
 #' @param asset_returns An xts object of asset returns.
+#' @param app_config A list containing application configuration.
 #' @return A vector of portfolio weights.
 calculate_hrp_weights <- function(asset_returns, app_config) {
-  cov_mat <- cov(asset_returns)
+  log_message("Starting HRP weight calculation.", level = "DEBUG", app_config = app_config)
+  
+  # HRP is sensitive to NA values in the covariance matrix
+  asset_returns_clean <- na.omit(asset_returns)
+  if (NROW(asset_returns_clean) < 2) {
+    log_message("Insufficient data for HRP after na.omit; returning equal weights.", level = "WARN", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "HRP", app_config))
+  }
+
+  cov_mat <- cov(asset_returns_clean)
   hrp_linkage_method <- app_config$default$models$hrp_linkage_method %||% "single"
 
   hrp_result <- try(HierPortfolios::HRP_Portfolio(covar = cov_mat, linkage = hrp_linkage_method, graph = FALSE), silent = TRUE)
 
   if (inherits(hrp_result, "try-error") || !("weights" %in% names(hrp_result))) {
-    return(get_equal_weight_fallback(asset_returns, "HRP"))
+    error_msg <- if (inherits(hrp_result, "try-error")) as.character(hrp_result) else "HRP_Portfolio did not return 'weights'."
+    log_message(paste("HRP calculation failed:", error_msg), level = "ERROR", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "HRP", app_config))
   } else {
     weights <- hrp_result$weights
     if (is.matrix(weights)) {
       weights <- as.vector(weights)
     }
     names(weights) <- colnames(asset_returns)
+    log_message("Successfully calculated HRP weights.", level = "DEBUG", app_config = app_config)
     return(weights)
   }
 }
@@ -179,18 +197,30 @@ calculate_hrp_weights <- function(asset_returns, app_config) {
 #' @title Calculate Equal Risk Contribution (ERC) Weights
 #' @description Calculates portfolio weights for Equal Risk Contribution.
 #' @param asset_returns An xts object of asset returns.
+#' @param app_config A list containing application configuration.
 #' @return A vector of portfolio weights.
-calculate_erc_weights <- function(asset_returns) {
-  cov_mat <- cov(asset_returns)
-  n <- ncol(asset_returns)
+calculate_erc_weights <- function(asset_returns, app_config) {
+  log_message("Starting ERC weight calculation.", level = "DEBUG", app_config = app_config)
+
+  asset_returns_clean <- na.omit(asset_returns)
+  if (NROW(asset_returns_clean) < 2) {
+    log_message("Insufficient data for ERC after na.omit; returning equal weights.", level = "WARN", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "ERC", app_config))
+  }
+
+  cov_mat <- cov(asset_returns_clean)
+  n <- ncol(asset_returns_clean)
   bvec <- rep(1 / n, n)
   result <- try(riskParityPortfolio::riskParityPortfolio(Sigma = cov_mat, b = bvec), silent = TRUE)
 
   if (inherits(result, "try-error")) {
-    return(get_equal_weight_fallback(asset_returns, "ERC"))
+    error_msg <- paste("ERC calculation failed. Error:", as.character(result))
+    log_message(error_msg, level = "ERROR", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "ERC", app_config))
   } else {
     weights <- as.vector(result$w)
-    names(weights) <- colnames(asset_returns)
+    names(weights) <- colnames(asset_returns_clean)
+    log_message("Successfully calculated ERC weights.", level = "DEBUG", app_config = app_config)
     return(weights)
   }
 }
@@ -199,20 +229,29 @@ calculate_erc_weights <- function(asset_returns) {
 #' @description Calculates portfolio weights that maximize the Sharpe ratio,
 #' using a Ledoit-Wolf shrinkage covariance matrix.
 #' @param asset_returns An xts object of asset returns.
+#' @param app_config A list containing application configuration.
 #' @param portfolio_name A character string for the portfolio name.
 #' @return A vector of portfolio weights.
-calculate_max_sharpe_weights <- function(asset_returns, portfolio_name = "MaxSharpe_LW_Portfolio") {
-  cov_lw <- calculate_lw_covariance(asset_returns)
-  mu <- colMeans(asset_returns)
+calculate_max_sharpe_weights <- function(asset_returns, app_config, portfolio_name = "MaxSharpe_LW_Portfolio") {
+  log_message("Starting Max-Sharpe (Ledoit-Wolf) weight calculation.", level = "DEBUG", app_config = app_config)
+
+  asset_returns_clean <- na.omit(asset_returns)
+  if (NROW(asset_returns_clean) < 2) {
+    log_message("Insufficient data for Max-Sharpe after na.omit; returning equal weights.", level = "WARN", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "Max-Sharpe LW", app_config))
+  }
   
-  portf <- portfolio.spec(assets = colnames(asset_returns))
+  cov_lw <- calculate_lw_covariance(asset_returns_clean)
+  mu <- colMeans(asset_returns_clean)
+
+  portf <- portfolio.spec(assets = colnames(asset_returns_clean))
   portf <- add.constraint(portf, type = "full_investment")
   portf <- add.constraint(portf, type = "long_only")
   portf <- add.objective(portf, type = "return", name = "mean")
   portf <- add.objective(portf, type = "risk", name = "StdDev")
-  
+
   result <- try(optimize.portfolio(
-    R = asset_returns,
+    R = asset_returns_clean,
     portfolio = portf,
     optimize_method = "random",
     search_size = 2000,
@@ -222,9 +261,12 @@ calculate_max_sharpe_weights <- function(asset_returns, portfolio_name = "MaxSha
   ), silent = TRUE)
 
   if (inherits(result, "try-error")) {
-    return(get_equal_weight_fallback(asset_returns, "Max-Sharpe LW"))
+    error_msg <- paste("Max-Sharpe (Ledoit-Wolf) optimization failed. Error:", as.character(result))
+    log_message(error_msg, level = "ERROR", app_config = app_config)
+    return(get_equal_weight_fallback(asset_returns, "Max-Sharpe LW", app_config))
   } else {
     weights <- PortfolioAnalytics::extractWeights(result)
+    log_message("Successfully calculated Max-Sharpe (Ledoit-Wolf) weights.", level = "DEBUG", app_config = app_config)
     return(as.numeric(weights))
   }
 }
@@ -249,10 +291,10 @@ calculate_base_strategy_weights <- function(asset_returns, app_config) {
   strategy_weights[["HRP"]] <- calculate_hrp_weights(asset_returns, app_config)
   
   # Strategy 4: ERC
-  strategy_weights[["ERC"]] <- calculate_erc_weights(asset_returns)
+  strategy_weights[["ERC"]] <- calculate_erc_weights(asset_returns, app_config)
   
   # Strategy 5: Robust Max-Sharpe (Ledoit-Wolf)
-  strategy_weights[["MaxSharpeLW"]] <- calculate_max_sharpe_weights(asset_returns)
+  strategy_weights[["MaxSharpeLW"]] <- calculate_max_sharpe_weights(asset_returns, app_config)
   
   return(strategy_weights)
 }
