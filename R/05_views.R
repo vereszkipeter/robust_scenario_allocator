@@ -177,27 +177,28 @@ apply_sequential_entropy_pooling <- function(simulated_scenarios, implied_equili
   ep_return_tolerance <- app_config$default$models$ep_return_tolerance
 
   # Replace the exact equality constraint with inequality constraints (range)
-  # constraints <- c(constraints,
-  #                  avg_asset_returns_per_scenario %*% p_new >= shrunk_implied_returns - ep_return_tolerance,
-  #                  avg_asset_returns_per_scenario %*% p_new <= shrunk_implied_returns + ep_return_tolerance
-  # )
-  # message(paste0("Implied equilibrium returns view incorporated into Entropy Pooling with shrinkage and tolerance +/-", ep_return_tolerance, "."))
+  # browser()
+  constraints <- c(constraints,
+                   avg_asset_returns_per_scenario %*% p_new >= shrunk_implied_returns - ep_return_tolerance,
+                   avg_asset_returns_per_scenario %*% p_new <= shrunk_implied_returns + ep_return_tolerance
+  )
+  message(paste0("Implied equilibrium returns view incorporated into Entropy Pooling with shrinkage and tolerance +/-", ep_return_tolerance, "."))
   
   # --- Handle Term Premium View if scenarios are available ---
-  # if (!is.null(term_premium_scenarios)) {
-  #   # Average Term Premium per Scenario (across horizon)
-  #   avg_term_premium_per_scenario <- apply(term_premium_scenarios, 1, mean) # Result is vector of length n_sim
-  #   
-  #   # Term Premium View (range view: min <= expected term premium <= max)
-  #   expected_term_premium <- sum(p_new * avg_term_premium_per_scenario)
-  #   constraints <- c(constraints,
-  #                    expected_term_premium >= term_premium_view_bounds$min,
-  #                    expected_term_premium <= term_premium_view_bounds$max
-  #   )
-  #   message("Term Premium view incorporated into Entropy Pooling.")
-  # } else {
-  #   warning("Term Premium scenarios are NULL. Skipping Term Premium view in Entropy Pooling.")
-  # }
+  if (!is.null(term_premium_scenarios)) {
+    # Average Term Premium per Scenario (across horizon)
+    avg_term_premium_per_scenario <- apply(term_premium_scenarios, 1, mean) # Result is vector of length n_sim
+    
+    # Term Premium View (range view: min <= expected term premium <= max)
+    expected_term_premium <- sum(p_new * avg_term_premium_per_scenario)
+    constraints <- c(constraints,
+                     expected_term_premium >= term_premium_view_bounds$min,
+                     expected_term_premium <= term_premium_view_bounds$max
+    )
+    message("Term Premium view incorporated into Entropy Pooling.")
+  } else {
+    warning("Term Premium scenarios are NULL. Skipping Term Premium view in Entropy Pooling.")
+  }
   
   # Formulate and solve the problem
   problem <- Problem(objective, constraints)

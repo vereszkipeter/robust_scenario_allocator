@@ -166,7 +166,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
       return(list(macro_scenarios = NULL, asset_scenarios = na_asset_array))
     }
   )
-# browser()
+  # browser()
   # If simulated_scenarios is NULL or malformed, ensure a valid fallback
   if (is.null(simulated_scenarios) || is.null(simulated_scenarios$asset_scenarios)) {
     message("Simulated scenarios missing or malformed; creating fallback zero-return scenarios.")
@@ -192,7 +192,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
     simulated_scenarios = simulated_scenarios,
     asset_metadata = asset_metadata,
     app_config = app_config
-  )
+  ) # TODO: Some strategies PnL is constant 1 by time
 
   # Anchoring / equilibrium
   erc_weights <- calculate_erc_weights(asset_returns, app_config = app_config)
@@ -204,6 +204,7 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
   )
 
   # Views & entropy pooling
+  # browser()
   short_rate_scenarios <- extract_short_rate_from_rsbvar_scenarios(simulated_scenarios$macro_scenarios, app_config = app_config)
   term_premium_model_output <- model_yield_curve_and_term_premium_view(short_rate_scenarios, app_config = app_config)
   adjusted_scenario_probabilities <- apply_sequential_entropy_pooling(
@@ -211,20 +212,42 @@ process_window <- function(window_id, from_date, to_date, val_date, oos_from_dat
     implied_equilibrium_returns = implied_equilibrium_returns,
     term_premium_model_output = term_premium_model_output,
     app_config = app_config
-  )
-
+  ) # TODO: EP did work? probs are constant 1/N-s!!!
+  log_message(cat("Adjusted scenario probabilities:\n", summary(adjusted_scenario_probabilities) |> print() |> capture.output() |> paste(collapse = "\n")), level = "INFO", app_config = app_config)
   entropy_pooled_scenarios <- list(scenarios = simulated_scenarios, probabilities = adjusted_scenario_probabilities)
 
   # Optimization
+  # browser()
   optimal_weights <- perform_distributionally_robust_optimization(
     base_strategy_pnl_on_scenarios = base_strategy_pnl_on_scenarios,
     scenario_probabilities = entropy_pooled_scenarios$probabilities,
     app_config = app_config
   )
-
+  log_message(paste0("Optimal weights of DRO meta:\n", print(optimal_weights) |> capture.output() |> paste(collapse = "\n")), level = "INFO", app_config = app_config)
+  # browser()
   # Out-of-sample performance for RSA
+  # First, calculate the final asset weights by combining meta-learner weights and base strategy weights
+  final_asset_weights <- rep(0, length(asset_metadata %>% filter(asset_class == "Asset") %>% pull(ticker)))
+  names(final_asset_weights) <- asset_metadata %>% filter(asset_class == "Asset") %>% pull(ticker)
+  
+  for (i in 1:length(optimal_weights)) {
+    strategy_name <- names(optimal_weights)[i]
+    meta_weight <- optimal_weights[i]
+    base_weights <- base_strategy_weights[[strategy_name]]
+    
+    # Ensure base_weights is a named vector
+    if (!is.null(names(base_weights))) {
+      # Add the weighted base strategy weights to the final asset weights
+      for (asset_name in names(base_weights)) {
+        if (asset_name %in% names(final_asset_weights)) {
+          final_asset_weights[asset_name] <- final_asset_weights[asset_name] + meta_weight * base_weights[asset_name]
+        }
+      }
+    }
+  }
+  
   oos_performance <- calculate_oos_performance(
-    optimal_weights = optimal_weights,
+    optimal_weights = final_asset_weights,
     oos_from_date = oos_from_date,
     oos_to_date = oos_to_date,
     asset_metadata = asset_metadata,

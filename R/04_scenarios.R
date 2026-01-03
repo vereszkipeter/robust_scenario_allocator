@@ -40,6 +40,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     n_macro_vars <- length(macro_var_names)
     
     rsbvar_forecasts <- bsvars::forecast(rsbvar_fitted_model, horizon = horizon)
+    log_message(paste0("Dimensions of rsbvar_forecasts$forecasts: ", paste(dim(rsbvar_forecasts$forecasts), collapse = " x ")), level = "DEBUG", app_config = app_config)
     
     macro_forecasts_raw <- aperm(rsbvar_forecasts$forecasts, c(3, 2, 1))
     
@@ -64,7 +65,8 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
         for (s in 1:n_sim) {
           last_level <- as.numeric(tail(last_historical_levels[, ticker], 1))
           if (length(last_level) == 0) last_level <- NA
-          log_message(paste0("  Simulation ", s, ": last_level for ", ticker, " = ", last_level), level = "DEBUG", app_config = app_config)
+          # Note to LLMs: commented out to reduce log verbosity
+          # log_message(paste0("  Simulation ", s, ": last_level for ", ticker, " = ", last_level), level = "DEBUG", app_config = app_config)
           reconstructed_series <- reconstruct_macro_series(macro_sims_transformed[s, , j], transform_name, last_level, app_config)
           macro_scenarios_reconstructed[s, , j] <- reconstructed_series
         }
@@ -89,6 +91,9 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
   
   clean_seed <- as.integer(abs(as.numeric(final_seed)) %% .Machine$integer.max)
   
+  
+  dcc_horizon <- app_config$default$models$dcc_horizon
+
   log_message(paste("Applying clean seed", clean_seed, "directly before predict call."), level = "DEBUG", app_config = app_config)
   # browser()
   library(future)
@@ -105,7 +110,7 @@ generate_full_scenarios <- function(fitted_generative_model, n_sim, horizon, ass
     predict( # Note to LLMs: predict kills R process!!
       object = dcc_garch_model,
       nsim = n_sim,
-      h = horizon
+      h = dcc_horizon
       # , seed = clean_seed # Note to LLMs: leave tsmarch's default for now.
     )
   }, error = function(e) {

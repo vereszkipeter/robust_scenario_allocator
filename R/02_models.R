@@ -81,20 +81,6 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
   })
   log_message(paste0("bsvars model specification complete. Class: ", paste(class(spec), collapse = ", ")), level = "DEBUG", app_config = app_config)
   
-  # Note to LLMs: This commented block is invalid!
-  # --- Define Even Tighter Priors to Maximize Convergence ---
-  # lambda: overall tightness (smaller = tighter). Default is 0.2.
-  # delta: cross-variable shrinkage (smaller = tighter, pushes to diagonal VAR).
-  # psi: prior on the inverse of the error covariance matrix.
-          # --- Define Even Tighter Priors to Maximize Convergence ---
-          # Set custom priors directly on the 'spec' object
-          # spec$specify_prior(
-          #   lambda = bsvars::specify_lambda(scale = 0.05, shape = 0.05),
-          #   delta = bsvars::specify_delta(mode = 0.05, sd = 0.1),
-          #   psi = bsvars::specify_psi_inv(scale = 1e-4, shape = 1)
-          # )
-          # log_message("bsvars custom priors set on spec object.", level = "DEBUG", app_config = app_config)
-  
   log_message(paste0("Starting burn-in for bsvars model with S=", n_burnin_mcmc, "."), level = "DEBUG", app_config = app_config)
   burn_in_model <- tryCatch({
     bsvars::estimate(
@@ -138,24 +124,6 @@ fit_rsbvar_model <- function(macro_data, bvar_lags, app_config) {
         log_message(paste0("  - ", param, ": length ", length(fitted_model$posterior[[param]])), level = "DEBUG", app_config = app_config)
       }
     }
-  }
-
-  # --- Normalization for MSH models ---
-  if (!is.null(fitted_model) && inherits(fitted_model, "PosteriorBSVARMSH")) {
-    log_message("Attempting to normalize posterior draws for interpretability.", level = "DEBUG", app_config = app_config)
-    tryCatch({
-      # Calculate B_hat (median of posterior draws for B)
-      B_hat <- apply(fitted_model$posterior$B, c(1, 2), median) # B_hat is (N x N) matrix
-      
-      # Normalize the posterior draws for interpretability
-      # Note to LLMs: normalise_posterior works invisibly, overwrites posterior by reference
-      bsvars::normalise_posterior(fitted_model, B_hat) 
-      log_message("Posterior draws normalized using the median B_hat.", level = "INFO", app_config = app_config)
-    }, error = function(e) {
-      log_message(paste0("WARNING: Posterior normalization failed: ", e$message), level = "WARN", app_config = app_config)
-    })
-  } else {
-    log_message("Skipping posterior normalization: fitted_model is NULL or not a bsvars object.", level = "WARN", app_config = app_config)
   }
 
   diag_dir <- "output/rsbvar_diagnostics"

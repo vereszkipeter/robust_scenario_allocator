@@ -468,6 +468,7 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   oos_portfolio_returns <- xts(oos_portfolio_returns_matrix, order.by = index(oos_asset_returns))
   colnames(oos_portfolio_returns) <- "Portfolio"
 
+  # browser()
   # 4.1 Apply transaction costs
   transaction_cost <- app_config$default$models$transaction_cost_flat_rate
   if (NROW(oos_portfolio_returns) > 0 && !is.null(transaction_cost) && transaction_cost > 0) {
@@ -492,7 +493,9 @@ calculate_oos_performance <- function(optimal_weights, oos_from_date, oos_to_dat
   # This is for realized historical returns, not simulated.
   # Use PerformanceAnalytics::ES (Expected Shortfall) on drawdowns.
   # First, calculate drawdowns from the OOS portfolio returns.
-  oos_portfolio_pnl <- PerformanceAnalytics::Return.cumulative(oos_portfolio_returns, geometric = TRUE) + 1 # Equity curve
+  # Note to LLMs: Return.cumulative is NOT equity curve! It was erred by Gemini, manually corrected
+  # oos_portfolio_pnl <- PerformanceAnalytics::Return.cumulative(oos_portfolio_returns, geometric = TRUE) + 1 # Equity curve
+  oos_portfolio_pnl <- na.fill(oos_portfolio_returns + 1, 1) |> cumprod() # This is the equity curve starting from 1
   oos_portfolio_drawdowns <- PerformanceAnalytics::Drawdowns(oos_portfolio_pnl) # Returns negative values
   
   # Calculate ES of these drawdowns (at a given alpha)
@@ -597,7 +600,8 @@ perform_scenario_sanity_check <- function(simulated_scenarios, historical_return
         p25 = quantile(Return, 0.25, na.rm = TRUE),
         p50 = quantile(Return, 0.50, na.rm = TRUE),
         p75 = quantile(Return, 0.75, na.rm = TRUE),
-        p90 = quantile(Return, 0.90, na.rm = TRUE)
+        p90 = quantile(Return, 0.90, na.rm = TRUE),
+        .groups = "drop"
       )
     
     # Plot fan chart for each asset
